@@ -62,8 +62,15 @@ def generate_report_result(report, filters=None, user=None, custom_columns=None)
 		ljust_list(res, 6)
 
 	if report.custom_columns:
+		# Original query columns, needed to reorder data as per custom columns
+		query_columns = columns
+		# Reordered columns
 		columns = json.loads(report.custom_columns)
+
+		result = reorder_data_for_custom_columns(columns, query_columns, result)
+
 		result = add_data_to_custom_columns(columns, result)
+
 	if custom_columns:
 		result = add_data_to_custom_columns(custom_columns, result)
 
@@ -161,7 +168,7 @@ def run(report_name, filters=None, user=None, ignore_prepared_report=False, cust
 
 	result = None
 
-	if report.prepared_report and not report.disable_prepared_report and not ignore_prepared_report:
+	if report.prepared_report and not report.disable_prepared_report and not ignore_prepared_report and not custom_columns:
 		if filters:
 			if isinstance(filters, string_types):
 				filters = json.loads(filters)
@@ -179,6 +186,9 @@ def run(report_name, filters=None, user=None, ignore_prepared_report=False, cust
 	return result
 
 def add_data_to_custom_columns(columns, result):
+	if not result:
+		return []
+
 	custom_fields_data = get_data_for_custom_report(columns)
 
 	data = []
@@ -207,6 +217,36 @@ def add_data_to_custom_columns(columns, result):
 				row[fieldname] = custom_fields_data.get(key, {}).get(row.get(link_field))
 
 	return data
+
+def reorder_data_for_custom_columns(custom_columns, columns, result):
+	if not result:
+		return []
+
+	columns = [get_column_as_dict(col) for col in columns]
+	if isinstance(result[0], list) or isinstance(result[0], tuple):
+		# If the result is a list of lists
+		custom_column_names = [col["label"] for col in custom_columns]
+		original_column_names = [col["label"] for col in columns]
+		return get_columns_from_list(custom_column_names, original_column_names, result)
+	else:
+		# columns do not need to be reordered if result is a list of dicts
+		return result
+
+def get_columns_from_list(columns, target_columns, result):
+	reordered_result = []
+
+	for res in result:
+		r = []
+		for col_name in columns:
+			try:
+				idx = target_columns.index(col_name)
+				r.append(res[idx])
+			except ValueError:
+				pass
+
+		reordered_result.append(r)
+
+	return reordered_result
 
 def get_prepared_report_result(report, filters, dn="", user=None):
 	latest_report_data = {}
@@ -242,7 +282,7 @@ def get_prepared_report_result(report, filters, dn="", user=None):
 				columns = json.loads(doc.columns) if doc.columns else data[0]
 
 				for column in columns:
-					if isinstance(column, dict):
+					if isinstance(column, dict) and column.get("label"):
 						column["label"] = _(column["label"])
 
 				latest_report_data = {
@@ -310,12 +350,13 @@ def export_query():
 		frappe.response['type'] = 'binary'
 
 
-def build_xlsx_data(columns, data, visible_idx,include_indentation):
+def build_xlsx_data(columns, data, visible_idx, include_indentation):
 	result = [[]]
 
 	# add column headings
 	for idx in range(len(data.columns)):
-		result[0].append(columns[idx]["label"])
+		if not columns[idx].get("hidden"):
+			result[0].append(columns[idx]["label"])
 
 	# build table from result
 	for i, row in enumerate(data.result):
@@ -325,12 +366,13 @@ def build_xlsx_data(columns, data, visible_idx,include_indentation):
 
 			if isinstance(row, dict) and row:
 				for idx in range(len(data.columns)):
-					label = columns[idx]["label"]
-					fieldname = columns[idx]["fieldname"]
-					cell_value = row.get(fieldname, row.get(label, ""))
-					if cint(include_indentation) and 'indent' in row and idx == 0:
-						cell_value = ('    ' * cint(row['indent'])) + cell_value
-					row_data.append(cell_value)
+					if not columns[idx].get("hidden"):
+						label = columns[idx]["label"]
+						fieldname = columns[idx]["fieldname"]
+						cell_value = row.get(fieldname, row.get(label, ""))
+						if cint(include_indentation) and 'indent' in row and idx == 0:
+							cell_value = ('    ' * cint(row['indent'])) + cell_value
+						row_data.append(cell_value)
 			else:
 				row_data = row
 
@@ -402,6 +444,9 @@ def add_total_row(result, columns, meta = None):
 
 @frappe.whitelist()
 def get_data_for_custom_field(doctype, field):
+
+	if not frappe.has_permission(doctype, "read"):
+		frappe.throw(_("Not Permitted"), frappe.PermissionError)
 
 	value_map = frappe._dict(frappe.get_all(doctype,
 		fields=["name", field],
@@ -575,30 +620,34 @@ def get_columns_dict(columns):
 	"""
 	columns_dict = frappe._dict()
 	for idx, col in enumerate(columns):
-		col_dict = frappe._dict()
-
-		# string
-		if isinstance(col, string_types):
-			col = col.split(":")
-			if len(col) > 1:
-				if "/" in col[1]:
-					col_dict["fieldtype"], col_dict["options"] = col[1].split("/")
-				else:
-					col_dict["fieldtype"] = col[1]
-
-			col_dict["label"] = col[0]
-			col_dict["fieldname"] = frappe.scrub(col[0])
-
-		# dict
-		else:
-			col_dict.update(col)
-			if "fieldname" not in col_dict:
-				col_dict["fieldname"] = frappe.scrub(col_dict["label"])
-
+		col_dict = get_column_as_dict(col)
 		columns_dict[idx] = col_dict
 		columns_dict[col_dict["fieldname"]] = col_dict
 
 	return columns_dict
+
+def get_column_as_dict(col):
+	col_dict = frappe._dict()
+
+	# string
+	if isinstance(col, string_types):
+		col = col.split(":")
+		if len(col) > 1:
+			if "/" in col[1]:
+				col_dict["fieldtype"], col_dict["options"] = col[1].split("/")
+			else:
+				col_dict["fieldtype"] = col[1]
+
+		col_dict["label"] = col[0]
+		col_dict["fieldname"] = frappe.scrub(col[0])
+
+	# dict
+	else:
+		col_dict.update(col)
+		if "fieldname" not in col_dict:
+			col_dict["fieldname"] = frappe.scrub(col_dict["label"])
+
+	return col_dict
 
 def get_user_match_filters(doctypes, user):
 	match_filters = {}

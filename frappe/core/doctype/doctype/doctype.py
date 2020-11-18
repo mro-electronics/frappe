@@ -495,7 +495,8 @@ class DocType(Document):
 						field_dict = list(filter(lambda d: d['fieldname'] == fieldname, docdict['fields']))
 						if field_dict:
 							new_field_dicts.append(field_dict[0])
-							remaining_field_names.remove(fieldname)
+							if fieldname in remaining_field_names:
+								remaining_field_names.remove(fieldname)
 
 					for fieldname in remaining_field_names:
 						field_dict = list(filter(lambda d: d['fieldname'] == fieldname, docdict['fields']))
@@ -517,7 +518,8 @@ class DocType(Document):
 				field_dict = list(filter(lambda d: d['fieldname'] == fieldname, docdict.get('fields', [])))
 				if field_dict:
 					new_field_dicts.append(field_dict[0])
-					remaining_field_names.remove(fieldname)
+					if fieldname in remaining_field_names:
+						remaining_field_names.remove(fieldname)
 
 			for fieldname in remaining_field_names:
 				field_dict = list(filter(lambda d: d['fieldname'] == fieldname, docdict.get('fields', [])))
@@ -654,13 +656,15 @@ class DocType(Document):
 		if not name:
 			name = self.name
 
+		flags = {"flags": re.ASCII} if six.PY3 else {}
+
+		# a DocType name should not start or end with an empty space
+		if re.match("^[ \t\n\r]+|[ \t\n\r]+$", name, **flags):
+			frappe.throw(_("DocType's name should not start or end with whitespace"), frappe.NameError)
+
 		# a DocType's name should not start with a number or underscore
 		# and should only contain letters, numbers and underscore
-		if six.PY2:
-			is_a_valid_name = re.match("^(?![\W])[^\d_\s][\w ]+$", name)
-		else:
-			is_a_valid_name = re.match("^(?![\W])[^\d_\s][\w ]+$", name, flags = re.ASCII)
-		if not is_a_valid_name:
+		if not re.match("^(?![\W])[^\d_\s][\w ]+$", name, **flags):
 			frappe.throw(_("DocType's name should start with a letter and it can only consist of letters, numbers, spaces and underscores"), frappe.NameError)
 
 
