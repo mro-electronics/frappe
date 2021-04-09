@@ -89,18 +89,20 @@ def delete_expired_prepared_reports():
 				'creation': ['<', frappe.utils.add_days(frappe.utils.now(), -expiry_period)]
 			})
 
-		batches = frappe.utils.create_batch(prepared_reports_to_delete, 100)
-		for batch in batches:
-			args = {
-				'reports': batch,
-			}
-			enqueue(method=delete_prepared_reports, job_name="delete_prepared_reports", **args)
+		args = {
+			'reports': prepared_reports_to_delete,
+			'limit': 50
+		}
+
+		enqueue(method=delete_prepared_reports, job_name="delete_prepared_reports", **args)
 
 @frappe.whitelist()
-def delete_prepared_reports(reports):
+def delete_prepared_reports(reports, limit=None):
 	reports = frappe.parse_json(reports)
-	for report in reports:
-		frappe.delete_doc('Prepared Report', report['name'], ignore_permissions=True)
+	for index, doc in enumerate(reports):
+		if limit and index == limit:
+			return
+		frappe.delete_doc('Prepared Report', doc['name'], ignore_permissions=True)
 
 def create_json_gz_file(data, dt, dn):
 	# Storing data in CSV file causes information loss

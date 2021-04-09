@@ -1,7 +1,6 @@
 frappe.ui.form.ControlData = frappe.ui.form.ControlInput.extend({
 	html_element: "input",
 	input_type: "text",
-	trigger_change_on_input_event: true,
 	make_input: function() {
 		if(this.$input) return;
 
@@ -20,21 +19,11 @@ frappe.ui.form.ControlData = frappe.ui.form.ControlInput.extend({
 		this.input = this.$input.get(0);
 		this.has_input = true;
 		this.bind_change_event();
+		this.bind_focusout();
 		this.setup_autoname_check();
-	},
-	bind_change_event: function() {
-		const change_handler = e => {
-			if (this.change) this.change(e);
-			else {
-				let value = this.get_input_value();
-				this.parse_validate_and_set_in_model(value, e);
-			}
-		};
-		this.$input.on("change", change_handler);
-		if (this.trigger_change_on_input_event) {
-			// debounce to avoid repeated validations on value change
-			this.$input.on("input", frappe.utils.debounce(change_handler, 500));
-		}
+
+		// somehow this event does not bubble up to document
+		// after v7, if you can debug, remove this
 	},
 	setup_autoname_check: function() {
 		if (!this.df.parent) return;
@@ -131,21 +120,14 @@ frappe.ui.form.ControlData = frappe.ui.form.ControlInput.extend({
 				// invalid email
 				return '';
 			} else {
-				var invalid_email = false;
+				let email_invalid = false;
 				email_list.forEach(function(email) {
 					if (!validate_email(email)) {
-						frappe.msgprint(__("Invalid Email: {0}", [email]));
-						invalid_email = true;
+						email_invalid = true;
 					}
 				});
-
-				if (invalid_email) {
-					// at least 1 invalid email
-					return '';
-				} else {
-					// all good
-					return v;
-				}
+				this.df.invalid = email_invalid;
+				return v;
 			}
 
 		} else {

@@ -413,18 +413,8 @@ class CustomizeForm(Document):
 		if not self.doc_type:
 			return
 
-		reset_customization(self.doc_type)
+		frappe.db.sql("""DELETE FROM `tabProperty Setter` WHERE doc_type=%s
+			and `field_name`!='naming_series'
+			and `property`!='options'""", self.doc_type)
+		frappe.clear_cache(doctype=self.doc_type)
 		self.fetch_to_customize()
-
-def reset_customization(doctype):
-	setters = frappe.get_all("Property Setter", filters={
-		'doc_type': doctype,
-		'field_name': ['!=', 'naming_series'],
-		'property': ['!=', 'options']
-	})
-
-	for setter in setters:
-		frappe.delete_doc("Property Setter", setter['name'])
-
-	frappe.clear_cache(doctype=doctype)
-		

@@ -371,7 +371,6 @@ export default class GridRow {
 
 		// no text editor in grid
 		if (df.fieldtype=='Text Editor') {
-			df = Object.assign({}, df);
 			df.fieldtype = 'Text';
 		}
 

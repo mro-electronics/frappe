@@ -23,7 +23,7 @@ if sys.version[0] == '2':
 	reload(sys)
 	sys.setdefaultencoding("utf-8")
 
-__version__ = '12.16.3'
+__version__ = '12.11.0'
 __title__ = "Frappe Framework"
 
 local = Local()
@@ -176,20 +176,17 @@ def init(site, sites_path=None, new_site=False):
 
 	local.initialised = True
 
-def connect(site=None, db_name=None, set_admin_as_user=True):
+def connect(site=None, db_name=None):
 	"""Connect to site database instance.
 
 	:param site: If site is given, calls `frappe.init`.
-	:param db_name: Optional. Will use from `site_config.json`.
-	:param set_admin_as_user: Set Administrator as current user.
-	"""
+	:param db_name: Optional. Will use from `site_config.json`."""
 	from frappe.database import get_db
 	if site:
 		init(site)
 
 	local.db = get_db(user=db_name or local.conf.db_name)
-	if set_admin_as_user:
-		set_user("Administrator")
+	set_user("Administrator")
 
 def connect_replica():
 	from frappe.database import get_db
@@ -906,13 +903,6 @@ def get_installed_apps(sort=False, frappe_last=False):
 	if not db:
 		connect()
 
-	if not hasattr(local, 'all_apps'):
-		local.all_apps = cache().get_value('all_apps', get_all_apps)
-
-		#cache bench apps
-		if not cache().get_value('all_apps'):
-			cache().set_value('all_apps', local.all_apps)
-
 	installed = json.loads(db.get_global("installed_apps") or "[]")
 
 	if sort:
@@ -1132,10 +1122,10 @@ def make_property_setter(args, ignore_validate=False, validate_fields_for_doctyp
 		ps.validate_fieldtype_change()
 		ps.insert()
 
-def import_doc(path):
+def import_doc(path, ignore_links=False, ignore_insert=False, insert=False):
 	"""Import a file using Data Import."""
 	from frappe.core.doctype.data_import.data_import import import_doc
-	import_doc(path)
+	import_doc(path, ignore_links=ignore_links, ignore_insert=ignore_insert, insert=insert)
 
 def copy_doc(doc, ignore_no_copy=True):
 	""" No_copy fields also get copied."""

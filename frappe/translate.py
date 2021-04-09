@@ -126,7 +126,8 @@ def get_dict(fortype, name=None):
 
 	translation_map = translation_assets[asset_key]
 
-	translation_map.update(get_user_translations(frappe.local.lang))
+	if fortype == "boot":
+		translation_map.update(get_user_translations(frappe.local.lang))
 
 	return translation_map
 
@@ -571,13 +572,13 @@ def write_csv_file(path, app_messages, lang_dict):
 	"""
 	app_messages.sort(key = lambda x: x[1])
 	from csv import writer
-	with open(path, 'w', newline='') as msgfile:
+	with open(path, 'wb') as msgfile:
 		w = writer(msgfile, lineterminator='\n')
 		for p, m in app_messages:
 			t = lang_dict.get(m, '')
 			# strip whitespaces
 			t = re.sub('{\s?([0-9]+)\s?}', "{\g<1>}", t)
-			w.writerow([p if p else '', m, t])
+			w.writerow([p.encode('utf-8') if p else '', m.encode('utf-8'), t.encode('utf-8')])
 
 def get_untranslated(lang, untranslated_file, get_all=False):
 	"""Returns all untranslated strings for a language and writes in a file
