@@ -602,7 +602,7 @@ frappe.views.ListView = class ListView extends frappe.views.BaseList {
 			}
 
 			return `<span class="ellipsis"
-				title="${__(label)}: ${frappe.utils.escape_html(_value)}">
+				title="${__(label)}: ${escape(_value)}">
 				${html}
 			</span>`;
 		};
@@ -704,7 +704,8 @@ frappe.views.ListView = class ListView extends frappe.views.BaseList {
 		if (this.settings.get_form_link) {
 			return this.settings.get_form_link(doc);
 		}
-		const docname = doc.name.match(/[%'"\s]/)
+
+		const docname = doc.name.match(/[\t%'"]/)
 			? encodeURIComponent(doc.name)
 			: doc.name;
 

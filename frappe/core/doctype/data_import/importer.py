@@ -616,9 +616,7 @@ class Row:
 			id_field = get_id_field(doctype)
 			id_value = doc.get(id_field.fieldname)
 			if id_value and frappe.db.exists(doctype, id_value):
-				existing_doc = frappe.get_doc(doctype, id_value)
-				existing_doc.update(doc)
-				doc = existing_doc
+				doc = frappe.get_doc(doctype, id_value)
 			else:
 				# for table rows being inserted in update
 				# create a new doc with defaults set
