@@ -171,11 +171,9 @@ class FormTimeline extends BaseTimeline {
 
 	get_communication_timeline_contents() {
 		let communication_timeline_contents = [];
-		let icon_set = {Email: "mail", Phone: "call", Meeting: "calendar", Other: "dot-horizontal"};
 		(this.doc_info.communications|| []).forEach(communication => {
-			let medium = communication.communication_medium;
 			communication_timeline_contents.push({
-				icon: icon_set[medium],
+				icon: 'mail',
 				icon_size: 'sm',
 				creation: communication.creation,
 				is_card: true,

@@ -8,7 +8,7 @@ import frappe
 from frappe.model.base_document import get_controller
 from frappe.modules import get_module_path, scrub_dt_dn
 from frappe.query_builder import DocType
-from frappe.utils import get_datetime, now
+from frappe.utils import get_datetime_str, now
 
 
 def caclulate_hash(path: str) -> str:
@@ -108,9 +108,7 @@ def import_file_by_path(path: str,force: bool = False,data_import: bool = False,
 
 			# modified timestamp in db, none if doctype's first import
 			db_modified_timestamp = frappe.db.get_value(doc["doctype"], doc["name"], "modified")
-			is_db_timestamp_latest = db_modified_timestamp and (
-				get_datetime(doc.get("modified")) <= get_datetime(db_modified_timestamp)
-			)
+			is_db_timestamp_latest = db_modified_timestamp and doc.get("modified") <= get_datetime_str(db_modified_timestamp)
 
 			if not force or db_modified_timestamp:
 				try:
@@ -121,11 +119,11 @@ def import_file_by_path(path: str,force: bool = False,data_import: bool = False,
 
 				# if hash exists and is equal no need to update
 				if stored_hash and stored_hash == calculated_hash:
-					continue
+					return False
 
 				# if hash doesn't exist, check if db timestamp is same as json timestamp, add hash if from doctype
 				if is_db_timestamp_latest and doc["doctype"] != "DocType":
-					continue
+					return False
 
 			import_doc(
 				docdict=doc,
@@ -161,7 +159,7 @@ def import_file_by_path(path: str,force: bool = False,data_import: bool = False,
 def is_timestamp_changed(doc):
 	# check if timestamps match
 	db_modified = frappe.db.get_value(doc["doctype"], doc["name"], "modified")
-	return not (db_modified and get_datetime(doc.get("modified")) == get_datetime(db_modified))
+	return not (db_modified and doc.get("modified") == get_datetime_str(db_modified))
 
 def read_doc_from_file(path):
 	doc = None
@@ -188,7 +186,7 @@ def update_modified(original_modified, doc):
 		).set(
 			singles_table.value,original_modified
 		).where(
-			singles_table["field"] == "modified",  # singles_table.field is a method of pypika Selectable
+			singles_table.field == "modified"
 		).where(
 			singles_table.doctype == doc["name"]
 		).run()

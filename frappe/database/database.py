@@ -170,10 +170,10 @@ class Database(object):
 				frappe.errprint(query)
 
 			elif self.is_deadlocked(e):
-				raise frappe.QueryDeadlockError(e)
+				raise frappe.QueryDeadlockError
 
 			elif self.is_timedout(e):
-				raise frappe.QueryTimeoutError(e)
+				raise frappe.QueryTimeoutError
 
 			if ignore_ddl and (self.is_missing_column(e) or self.is_missing_table(e) or self.cant_drop_field_or_key(e)):
 				pass

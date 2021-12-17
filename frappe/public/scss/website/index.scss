@@ -8,8 +8,6 @@
 @import "../common/flex";
 @import "../common/buttons";
 @import "../common/modal";
-@import "../desk/toast";
-@import "../common/css_variables.scss";
 @import "../common/indicator";
 @import "../common/controls";
 @import "../common/awesomeplete";
@@ -190,14 +188,11 @@ h5.modal-title {
 
 .btn-xs {
 	@extend .btn-sm;
-
 }
 
 .hidden-xs {
 	@extend .d-block;
-	@include media-breakpoint-between(xs, sm) {
-		display: none !important;
-	}
+	@extend .d-sm-none;
 }
 
 .visible-xs {

@@ -5,6 +5,7 @@ from frappe.utils import cstr
 
 queue_prefix = 'insert_queue_for_'
 
+@frappe.whitelist()
 def deferred_insert(doctype, records):
 	frappe.cache().rpush(queue_prefix + doctype, records)
 

@@ -185,9 +185,7 @@ def make_form_dict(request):
 	if 'application/json' in (request.content_type or '') and request_data:
 		args = json.loads(request_data)
 	else:
-		args = {}
-		args.update(request.args or {})
-		args.update(request.form or {})
+		args = request.form or request.args
 
 	if not isinstance(args, dict):
 		frappe.throw("Invalid request arguments")
