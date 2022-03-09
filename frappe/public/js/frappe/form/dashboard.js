@@ -5,6 +5,7 @@ frappe.ui.form.Dashboard = class FormDashboard {
 	constructor(opts) {
 		$.extend(this, opts);
 		this.setup_dashboard_sections();
+		this.set_open_count = frappe.utils.throttle(this.set_open_count, 500);
 	}
 
 	setup_dashboard_sections() {
@@ -178,6 +179,7 @@ frappe.ui.form.Dashboard = class FormDashboard {
 				return;
 			}
 			this.render_links();
+			this.set_open_count();
 			show = true;
 		}
 
@@ -204,7 +206,6 @@ frappe.ui.form.Dashboard = class FormDashboard {
 				$(this).removeClass('hidden');
 			}
 		});
-		!this.frm.is_new() && this.set_open_count();
 	}
 
 	init_data() {

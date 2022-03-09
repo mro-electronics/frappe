@@ -502,9 +502,10 @@ export default class Grid {
 
 	set_column_disp(fieldname, show) {
 		if ($.isArray(fieldname)) {
-			for (let field of fieldname) {
-				this.update_docfield_property(field, "hidden", show);
-				this.set_editable_grid_column_disp(field, show);
+			for (var i = 0, l = fieldname.length; i < l; i++) {
+				var fname = fieldname[i];
+				this.get_docfield(fname).hidden = show ? 0 : 1;
+				this.set_editable_grid_column_disp(fname, show);
 			}
 		} else {
 			this.get_docfield(fieldname).hidden = show ? 0 : 1;
@@ -554,17 +555,17 @@ export default class Grid {
 	}
 
 	toggle_reqd(fieldname, reqd) {
-		this.update_docfield_property(fieldname, "reqd", reqd);
+		this.get_docfield(fieldname).reqd = reqd;
 		this.debounced_refresh();
 	}
 
 	toggle_enable(fieldname, enable) {
-		this.update_docfield_property(fieldname, "read_only", enable ? 0 : 1);
+		this.get_docfield(fieldname).read_only = enable ? 0 : 1;
 		this.debounced_refresh();
 	}
 
 	toggle_display(fieldname, show) {
-		this.update_docfield_property(fieldname, "hidden", show ? 0 : 1);
+		this.get_docfield(fieldname).hidden = show ? 0 : 1;
 		this.debounced_refresh();
 	}
 

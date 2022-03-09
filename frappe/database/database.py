@@ -271,9 +271,7 @@ class Database(object):
 				if self.auto_commit_on_many_writes:
 					self.commit()
 				else:
-					msg = "<br><br>" + _("Too many changes to database in single action.") + "<br>"
-					msg += _("The changes have been reverted.") + "<br>"
-					raise frappe.TooManyWritesError(msg)
+					frappe.throw(_("Too many writes in one request. Please send smaller requests"), frappe.ValidationError)
 
 	def fetch_as_dict(self, formatted=0, as_utf8=0):
 		"""Internal. Converts results to dict."""

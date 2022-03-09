@@ -156,12 +156,7 @@ def get_rendered_template(doc, name=None, print_format=None, meta=None,
 
 	convert_markdown(doc, meta)
 
-	args = {}
-	# extract `print_heading_template` from the first field and remove it
-	if format_data and format_data[0].get("fieldname") == "print_heading_template":
-		args["print_heading_template"] = format_data.pop(0).get("options")
-
-	args.update({
+	args = {
 		"doc": doc,
 		"meta": frappe.get_meta(doc.doctype),
 		"layout": make_layout(doc, meta, format_data),
@@ -170,7 +165,7 @@ def get_rendered_template(doc, name=None, print_format=None, meta=None,
 		"letter_head": letter_head.content,
 		"footer": letter_head.footer,
 		"print_settings": print_settings
-	})
+	}
 
 	html = template.render(args, filters={"len": len})
 
@@ -284,6 +279,13 @@ def make_layout(doc, meta, format_data=None):
 	:param format_data: Fields sequence and properties defined by Print Format Builder."""
 	layout, page = [], []
 	layout.append(page)
+
+	if format_data:
+		# extract print_heading_template from the first field
+		# and remove the field
+		if format_data[0].get("fieldname") == "print_heading_template":
+			doc.print_heading_template = format_data[0].get("options")
+			format_data = format_data[1:]
 
 	def get_new_section(): return  {'columns': [], 'has_data': False}
 

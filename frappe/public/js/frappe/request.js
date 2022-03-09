@@ -50,11 +50,6 @@ frappe.call = function(opts) {
 	}
 	var args = $.extend({}, opts.args);
 
-	if (args.freeze) {
-		opts.freeze = opts.freeze || args.freeze;
-		opts.freeze_message = opts.freeze_message || args.freeze_message;
-	}
-
 	// cmd
 	if(opts.module && opts.page) {
 		args.cmd = opts.module+'.page.'+opts.page+'.'+opts.page+'.'+opts.method;

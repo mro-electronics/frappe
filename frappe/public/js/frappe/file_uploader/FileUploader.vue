@@ -180,7 +180,6 @@ export default {
 			currently_uploading: -1,
 			show_file_browser: false,
 			show_web_link: false,
-			close_dialog: false,
 			allow_take_photo: false,
 			google_drive_settings: {
 				enabled: false
@@ -465,21 +464,22 @@ export default {
 			});
 		},
 		show_google_drive_picker() {
-			this.close_dialog = true;
+			let dialog = cur_dialog;
+			dialog.hide();
 			let google_drive = new GoogleDrivePicker({
-				pickerCallback: data => this.google_drive_callback(data),
+				pickerCallback: data => this.google_drive_callback(data, dialog),
 				...this.google_drive_settings
 			});
 			google_drive.loadPicker();
 		},
-		google_drive_callback(data) {
+		google_drive_callback(data, dialog) {
 			if (data.action == google.picker.Action.PICKED) {
 				this.upload_file({
 					file_url: data.docs[0].url,
 					file_name: data.docs[0].name
 				});
 			} else if (data.action == google.picker.Action.CANCEL) {
-				cur_frm.attachments.new_attachment()
+				dialog.show();
 			}
 		},
 		url_to_file(url, filename, mime_type) {

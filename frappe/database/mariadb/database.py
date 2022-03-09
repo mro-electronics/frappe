@@ -244,16 +244,9 @@ class MariaDBDatabase(Database):
 			column_name as 'name',
 			column_type as 'type',
 			column_default as 'default',
-			COALESCE(
-				(select 1
-				from information_schema.statistics
-				where table_name="{table_name}"
-					and column_name=columns.column_name
-					and NON_UNIQUE=1
-					limit 1
-			), 0) as 'index',
+			column_key = 'MUL' as 'index',
 			column_key = 'UNI' as 'unique'
-			from information_schema.columns as columns
+			from information_schema.columns
 			where table_name = '{table_name}' '''.format(table_name=table_name), as_dict=1)
 
 	def has_index(self, table_name, index_name):
