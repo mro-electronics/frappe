@@ -37,7 +37,7 @@ from frappe.model.document import Document
 from frappe.model.meta import Meta
 from frappe.modules import get_doc_path, make_boilerplate
 from frappe.modules.import_file import get_file_path
-from frappe.utils import cint, now
+from frappe.utils import cint, now, random_string
 
 
 class InvalidFieldNameError(frappe.ValidationError):
@@ -332,7 +332,7 @@ class DocType(Document):
 						elif d.fieldtype == "Column Break":
 							d.fieldname = d.fieldname + "_column"
 					else:
-						d.fieldname = d.fieldtype.lower().replace(" ", "_") + "_" + str(d.idx)
+						d.fieldname = d.fieldtype.lower().replace(" ", "_") + "_" + str(random_string(5))
 				else:
 					if d.fieldname in restricted:
 						frappe.throw(_("Fieldname {0} is restricted").format(d.fieldname), InvalidFieldNameError)
@@ -848,7 +848,7 @@ def validate_series(dt, autoname=None, name=None):
 
 def validate_links_table_fieldnames(meta):
 	"""Validate fieldnames in Links table"""
-	if not meta.links or frappe.flags.in_patch or frappe.flags.in_fixtures:
+	if not meta.links or frappe.flags.in_patch or frappe.flags.in_fixtures or frappe.flags.in_migrate:
 		return
 
 	fieldnames = tuple(field.fieldname for field in meta.fields)
@@ -963,10 +963,7 @@ def validate_fields(meta):
 			)
 
 	def check_link_table_options(docname, d):
-		if frappe.flags.in_patch:
-			return
-
-		if frappe.flags.in_fixtures:
+		if frappe.flags.in_patch or frappe.flags.in_fixtures:
 			return
 
 		if d.fieldtype in ("Link",) + table_fields:
@@ -1000,7 +997,7 @@ def validate_fields(meta):
 					d.options = options
 
 	def check_hidden_and_mandatory(docname, d):
-		if d.hidden and d.reqd and not d.default:
+		if d.hidden and d.reqd and not d.default and not frappe.flags.in_migrate:
 			frappe.throw(
 				_("{0}: Field {1} in row {2} cannot be hidden and mandatory without default").format(
 					docname, d.label, d.idx
@@ -1267,10 +1264,9 @@ def validate_fields(meta):
 				)
 				df_options_str = "<ul><li>" + "</li><li>".join([_(x) for x in data_field_options]) + "</ul>"
 
-				frappe.msgprint(text_str + df_options_str, title="Invalid Data Field", raise_exception=True)
+				frappe.msgprint(text_str + df_options_str, title="Invalid Data Field", alert=True)
 
 	def check_child_table_option(docfield):
-
 		if frappe.flags.in_fixtures:
 			return
 		if docfield.fieldtype not in ["Table MultiSelect", "Table"]:
@@ -1307,28 +1303,31 @@ def validate_fields(meta):
 		check_invalid_fieldnames(meta.get("name"), d.fieldname)
 		check_unique_fieldname(meta.get("name"), d.fieldname)
 		check_fieldname_length(d.fieldname)
-		check_illegal_mandatory(meta.get("name"), d)
-		check_link_table_options(meta.get("name"), d)
-		check_dynamic_link_options(d)
 		check_hidden_and_mandatory(meta.get("name"), d)
-		check_in_list_view(meta.get("istable"), d)
-		check_in_global_search(d)
-		check_illegal_default(d)
 		check_unique_and_text(meta.get("name"), d)
-		check_illegal_depends_on_conditions(d)
-		check_child_table_option(d)
 		check_table_multiselect_option(d)
 		scrub_options_in_select(d)
 		scrub_fetch_from(d)
 		validate_data_field_type(d)
 
-	check_fold(fields)
-	check_search_fields(meta, fields)
-	check_title_field(meta)
-	check_timeline_field(meta)
-	check_is_published_field(meta)
-	check_sort_field(meta)
-	check_image_field(meta)
+		if not frappe.flags.in_migrate:
+			check_link_table_options(meta.get("name"), d)
+			check_illegal_mandatory(meta.get("name"), d)
+			check_dynamic_link_options(d)
+			check_in_list_view(meta.get("istable"), d)
+			check_in_global_search(d)
+			check_illegal_depends_on_conditions(d)
+			check_illegal_default(d)
+			check_child_table_option(d)
+
+	if not frappe.flags.in_migrate:
+		check_fold(fields)
+		check_search_fields(meta, fields)
+		check_title_field(meta)
+		check_timeline_field(meta)
+		check_is_published_field(meta)
+		check_sort_field(meta)
+		check_image_field(meta)
 
 
 def validate_permissions_for_doctype(doctype, for_remove=False, alert=False):
