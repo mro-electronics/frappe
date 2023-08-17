@@ -414,9 +414,12 @@ $.extend(frappe, {
 				language_switcher.val(language);
 				document.documentElement.lang = language;
 				language_switcher.change(() => {
-					const lang = language_switcher.val();
-					document.cookie = `preferred_language=${lang}`;
-					window.location.reload();
+					let lang = language_switcher.val();
+					frappe.call("frappe.translate.set_preferred_language_cookie", {
+						"preferred_language": lang
+					}).then(() => {
+						window.location.reload();
+					});
 				});
 			});
 		}
