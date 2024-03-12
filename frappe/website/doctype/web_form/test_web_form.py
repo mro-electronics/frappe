@@ -64,9 +64,7 @@ class TestWebForm(FrappeTestCase):
 
 		accept(web_form="manage-events", docname=self.event_name, data=json.dumps(doc))
 
-		self.assertEqual(
-			frappe.db.get_value("Event", self.event_name, "description"), doc.get("description")
-		)
+		self.assertEqual(frappe.db.get_value("Event", self.event_name, "description"), doc.get("description"))
 
 	def test_webform_render(self):
 		set_request(method="GET", path="manage-events/new")
@@ -75,3 +73,11 @@ class TestWebForm(FrappeTestCase):
 		self.assertIn('data-doctype="Web Form"', content)
 		self.assertIn('data-path="manage-events/new"', content)
 		self.assertIn('source-type="Generator"', content)
+
+	def test_webform_html_meta_is_added(self):
+		set_request(method="GET", path="manage-events/new")
+		content = get_response_content("manage-events/new")
+
+		self.assertIn('<meta name="name" content="Test Meta Form Title">', content)
+		self.assertIn('<meta property="og:description" content="Test Meta Form Description">', content)
+		self.assertIn('<meta property="og:image" content="https://frappe.io/files/frappe.png">', content)

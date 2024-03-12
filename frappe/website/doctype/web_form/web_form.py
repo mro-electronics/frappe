@@ -11,7 +11,7 @@ from frappe.core.doctype.file import remove_file_by_url
 from frappe.desk.form.meta import get_code_files_via_hooks
 from frappe.modules.utils import export_module_json, get_doc_module
 from frappe.rate_limiter import rate_limit
-from frappe.utils import cstr, dict_with_keys, strip_html
+from frappe.utils import dict_with_keys, strip_html
 from frappe.website.utils import get_boot_data, get_comment_list, get_sidebar_items
 from frappe.website.website_generator import WebsiteGenerator
 
@@ -153,10 +153,12 @@ def get_context(context):
 			and not frappe.form_dict.name
 			and not frappe.form_dict.is_list
 		):
-			name = frappe.db.get_value(self.doc_type, {"owner": frappe.session.user}, "name")
-			if name:
+			condition_json = json.loads(self.condition_json) if self.condition_json else []
+			condition_json.append(["owner", "=", frappe.session.user])
+			names = frappe.get_all(self.doc_type, filters=condition_json, pluck="name")
+			if names:
 				context.in_view_mode = True
-				frappe.redirect(f"/{self.route}/{name}")
+				frappe.redirect(f"/{self.route}/{names[0]}")
 
 		# Show new form when
 		# - User is Guest
@@ -191,9 +193,25 @@ def get_context(context):
 
 		self.add_custom_context_and_script(context)
 		self.load_translations(context)
+		self.add_metatags(context)
 
 		context.boot = get_boot_data()
 		context.boot["link_title_doctypes"] = frappe.boot.get_link_title_doctypes()
+
+		context.webform_banner_image = self.banner_image
+		context.pop("banner_image", None)
+
+	def add_metatags(self, context):
+		description = self.meta_description
+
+		if not description and self.introduction_text:
+			description = self.introduction_text[:140]
+
+		context.metatags = {
+			"name": self.meta_title or self.title,
+			"description": description,
+			"image": self.meta_image,
+		}
 
 	def load_translations(self, context):
 		translated_messages = frappe.translate.get_dict("doctype", self.doc_type)
@@ -364,7 +382,7 @@ def get_web_form_module(doc):
 
 
 @frappe.whitelist(allow_guest=True)
-@rate_limit(key="web_form", limit=5, seconds=60, methods=["POST"])
+@rate_limit(key="web_form", limit=10, seconds=60)
 def accept(web_form, data):
 	"""Save the web form"""
 	data = frappe._dict(json.loads(data))
@@ -374,6 +392,10 @@ def accept(web_form, data):
 
 	web_form = frappe.get_doc("Web Form", web_form)
 	doctype = web_form.doc_type
+	user = frappe.session.user
+
+	if web_form.anonymous and frappe.session.user != "Guest":
+		frappe.session.user = "Guest"
 
 	if data.name and not web_form.allow_edit:
 		frappe.throw(_("You are not allowed to update this Web Form Document"))
@@ -454,6 +476,9 @@ def accept(web_form, data):
 		for f in files_to_delete:
 			if f:
 				remove_file_by_url(f, doctype=doctype, name=doc.name)
+
+	if web_form.anonymous and frappe.session.user == "Guest" and user:
+		frappe.session.user = user
 
 	frappe.flags.web_form_doc = doc
 	return doc
@@ -595,16 +620,14 @@ def get_link_options(web_form_name, doctype, allow_read_on_all_link_options=Fals
 
 		fields = ["name as value"]
 
-		title_field = frappe.db.get_value("DocType", doctype, "title_field", cache=1)
-		show_title_field_in_link = (
-			frappe.db.get_value("DocType", doctype, "show_title_field_in_link", cache=1) == 1
-		)
-		if title_field and show_title_field_in_link:
-			fields.append(f"{title_field} as label")
+		meta = frappe.get_meta(doctype)
+
+		if meta.title_field and meta.show_title_field_in_link:
+			fields.append(f"{meta.title_field} as label")
 
 		link_options = frappe.get_all(doctype, filters, fields)
 
-		if title_field and show_title_field_in_link:
+		if meta.title_field and meta.show_title_field_in_link:
 			return json.dumps(link_options, default=str)
 		else:
 			return "\n".join([doc.value for doc in link_options])

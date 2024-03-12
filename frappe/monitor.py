@@ -32,6 +32,12 @@ def add_data_to_monitor(**kwargs) -> None:
 		frappe.local.monitor.add_custom_data(**kwargs)
 
 
+def get_trace_id() -> str | None:
+	"""Get unique ID for current transaction."""
+	if monitor := getattr(frappe.local, "monitor", None):
+		return monitor.data.uuid
+
+
 def log_file():
 	return os.path.join(frappe.utils.get_bench_path(), "logs", "monitor.json.log")
 
@@ -89,8 +95,11 @@ class Monitor:
 			self.data.duration = int(timediff.total_seconds() * 1000000)
 
 			if self.data.transaction_type == "request":
-				self.data.request.status_code = response.status_code
-				self.data.request.response_length = int(response.headers.get("Content-Length", 0))
+				if response:
+					self.data.request.status_code = response.status_code
+					self.data.request.response_length = int(response.headers.get("Content-Length", 0))
+				else:
+					self.data.request.status_code = 500
 
 				if hasattr(frappe.local, "rate_limiter"):
 					limiter = frappe.local.rate_limiter

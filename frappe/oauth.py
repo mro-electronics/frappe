@@ -3,7 +3,7 @@ import datetime
 import hashlib
 import re
 from http import cookies
-from urllib.parse import unquote, urlparse
+from urllib.parse import unquote, urljoin, urlparse
 
 import jwt
 import pytz
@@ -11,10 +11,10 @@ from oauthlib.openid import RequestValidator
 
 import frappe
 from frappe.auth import LoginManager
+from frappe.utils.data import get_system_timezone, now_datetime
 
 
 class OAuthWebRequestValidator(RequestValidator):
-
 	# Pre- and post-authorization.
 	def validate_client_id(self, client_id, request, *args, **kwargs):
 		# Simple validity check, does client exist? Not banned?
@@ -73,7 +73,6 @@ class OAuthWebRequestValidator(RequestValidator):
 	# Post-authorization
 
 	def save_authorization_code(self, client_id, code, request, *args, **kwargs):
-
 		cookie_dict = get_cookie_dict_from_headers(request)
 
 		oac = frappe.new_doc("OAuth Authorization Code")
@@ -247,13 +246,7 @@ class OAuthWebRequestValidator(RequestValidator):
 	def validate_bearer_token(self, token, scopes, request):
 		# Remember to check expiration and scope membership
 		otoken = frappe.get_doc("OAuth Bearer Token", token)
-		token_expiration_local = otoken.expiration_time.replace(
-			tzinfo=pytz.timezone(frappe.utils.get_time_zone())
-		)
-		token_expiration_utc = token_expiration_local.astimezone(pytz.utc)
-		is_token_valid = (
-			frappe.utils.datetime.datetime.utcnow().replace(tzinfo=pytz.utc) < token_expiration_utc
-		) and otoken.status != "Revoked"
+		is_token_valid = (now_datetime() < otoken.expiration_time) and otoken.status != "Revoked"
 		client_scopes = frappe.db.get_value("OAuth Client", otoken.client, "scopes").split(
 			get_url_delimiter()
 		)
@@ -308,9 +301,7 @@ class OAuthWebRequestValidator(RequestValidator):
 		- Refresh Token Grant
 		"""
 
-		otoken = frappe.get_doc(
-			"OAuth Bearer Token", {"refresh_token": refresh_token, "status": "Active"}
-		)
+		otoken = frappe.get_doc("OAuth Bearer Token", {"refresh_token": refresh_token, "status": "Active"})
 
 		if not otoken:
 			return False
@@ -329,6 +320,8 @@ class OAuthWebRequestValidator(RequestValidator):
 			id_token["nonce"] = request.nonce
 
 		userinfo = get_userinfo(user)
+
+		id_token["exp"] = id_token.get("iat") + token.get("expires_in")
 
 		if userinfo.get("iss"):
 			id_token["iss"] = userinfo.get("iss")
@@ -362,6 +355,7 @@ class OAuthWebRequestValidator(RequestValidator):
 
 	def get_jwt_bearer_token(self, token, token_handler, request):
 		now = datetime.datetime.now()
+
 		id_token = dict(
 			aud=token.client_id,
 			iat=round(now.timestamp()),
@@ -409,9 +403,9 @@ class OAuthWebRequestValidator(RequestValidator):
 		- OpenIDConnectHybrid
 		"""
 		if request.prompt == "login":
-			False
+			return False
 		else:
-			True
+			return True
 
 	def validate_silent_login(self, request):
 		"""Ensure session user has authorized silent OpenID login.
@@ -574,7 +568,7 @@ def get_userinfo(user):
 		if frappe.utils.validate_url(user.user_image, valid_schemes=valid_url_schemes):
 			picture = user.user_image
 		else:
-			picture = frappe_server_url + "/" + user.user_image
+			picture = urljoin(frappe_server_url, user.user_image)
 
 	userinfo = frappe._dict(
 		{

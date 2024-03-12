@@ -47,14 +47,12 @@ def authorize_access(reauthorize=False, code=None):
 	Google Contact Name is set to flags to set_value after Authorization Code is obtained.
 	"""
 
-	oauth_code = (
-		frappe.db.get_single_value("Google Drive", "authorization_code") if not code else code
-	)
+	oauth_code = frappe.db.get_single_value("Google Drive", "authorization_code") if not code else code
 	oauth_obj = GoogleOAuth("drive")
 
 	if not oauth_code or reauthorize:
 		if reauthorize:
-			frappe.db.set_value("Google Drive", None, "backup_folder_id", "")
+			frappe.db.set_single_value("Google Drive", "backup_folder_id", "")
 		return oauth_obj.get_authentication_url(
 			{
 				"redirect": f"/app/Form/{quote('Google Drive')}",
@@ -62,8 +60,7 @@ def authorize_access(reauthorize=False, code=None):
 		)
 
 	r = oauth_obj.authorize(oauth_code)
-	frappe.db.set_value(
-		"Google Drive",
+	frappe.db.set_single_value(
 		"Google Drive",
 		{"authorization_code": oauth_code, "refresh_token": r.get("refresh_token")},
 	)
@@ -95,7 +92,7 @@ def check_for_folder_in_google_drive():
 
 		try:
 			folder = google_drive.files().create(body=file_metadata, fields="id").execute()
-			frappe.db.set_value("Google Drive", None, "backup_folder_id", folder.get("id"))
+			frappe.db.set_single_value("Google Drive", "backup_folder_id", folder.get("id"))
 			frappe.db.commit()
 		except HttpError as e:
 			frappe.throw(
@@ -114,13 +111,11 @@ def check_for_folder_in_google_drive():
 			google_drive.files().list(q="mimeType='application/vnd.google-apps.folder'").execute()
 		)
 	except HttpError as e:
-		frappe.throw(
-			_("Google Drive - Could not find folder in Google Drive - Error Code {0}").format(e)
-		)
+		frappe.throw(_("Google Drive - Could not find folder in Google Drive - Error Code {0}").format(e))
 
 	for f in google_drive_folders.get("files"):
 		if f.get("name") == account.backup_folder_name:
-			frappe.db.set_value("Google Drive", None, "backup_folder_id", f.get("id"))
+			frappe.db.set_single_value("Google Drive", "backup_folder_id", f.get("id"))
 			frappe.db.commit()
 			backup_folder_exists = True
 			break
@@ -154,7 +149,7 @@ def upload_system_backup_to_google_drive():
 	validate_file_size()
 
 	if frappe.flags.create_new_backup:
-		set_progress(1, "Backing up Data.")
+		set_progress(1, _("Backing up Data."))
 		backup = new_backup()
 		file_urls = []
 		file_urls.append(backup.backup_path_db)
@@ -170,7 +165,7 @@ def upload_system_backup_to_google_drive():
 		if not fileurl:
 			continue
 
-		file_metadata = {"name": fileurl, "parents": [account.backup_folder_id]}
+		file_metadata = {"name": os.path.basename(fileurl), "parents": [account.backup_folder_id]}
 
 		try:
 			media = MediaFileUpload(
@@ -180,13 +175,13 @@ def upload_system_backup_to_google_drive():
 			frappe.throw(_("Google Drive - Could not locate - {0}").format(e))
 
 		try:
-			set_progress(2, "Uploading backup to Google Drive.")
+			set_progress(2, _("Uploading backup to Google Drive."))
 			google_drive.files().create(body=file_metadata, media_body=media, fields="id").execute()
 		except HttpError as e:
 			send_email(False, "Google Drive", "Google Drive", "email", error_status=e)
 
-	set_progress(3, "Uploading successful.")
-	frappe.db.set_value("Google Drive", None, "last_backup_on", frappe.utils.now_datetime())
+	set_progress(3, _("Uploading successful."))
+	frappe.db.set_single_value("Google Drive", "last_backup_on", frappe.utils.now_datetime())
 	send_email(True, "Google Drive", "Google Drive", "email")
 	return _("Google Drive Backup Successful.")
 

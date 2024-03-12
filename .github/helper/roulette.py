@@ -4,20 +4,41 @@ import re
 import shlex
 import subprocess
 import sys
+import time
 import urllib.request
-from functools import lru_cache
+from functools import cache, lru_cache
+from urllib.error import HTTPError
 
 
-@lru_cache(maxsize=None)
+@cache
 def fetch_pr_data(pr_number, repo, endpoint=""):
 	api_url = f"https://api.github.com/repos/{repo}/pulls/{pr_number}"
 
 	if endpoint:
 		api_url += f"/{endpoint}"
 
-	req = urllib.request.Request(api_url)
-	res = urllib.request.urlopen(req)
+	res = req(api_url)
 	return json.loads(res.read().decode("utf8"))
+
+
+def req(url):
+	"Simple resilient request call to handle rate limits."
+	headers = None
+	token = os.environ.get("GITHUB_TOKEN")
+	if token:
+		headers = {"authorization": f"Bearer {token}"}
+
+	retries = 0
+	while True:
+		try:
+			req = urllib.request.Request(url, headers=headers)
+			return urllib.request.urlopen(req)
+		except HTTPError as exc:
+			if exc.code == 403 and retries < 5:
+				retries += 1
+				time.sleep(retries)
+				continue
+			raise
 
 
 def get_files_list(pr_number, repo="frappe/frappe"):
@@ -61,9 +82,7 @@ def is_ci(file):
 
 
 def is_frontend_code(file):
-	return file.lower().endswith(
-		(".css", ".scss", ".less", ".sass", ".styl", ".js", ".ts", ".vue", ".html")
-	)
+	return file.lower().endswith((".css", ".scss", ".less", ".sass", ".styl", ".js", ".ts", ".vue", ".html"))
 
 
 def is_docs(file):

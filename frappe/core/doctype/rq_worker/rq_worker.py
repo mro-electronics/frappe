@@ -8,15 +8,14 @@ from rq import Worker
 
 import frappe
 from frappe.model.document import Document
-from frappe.utils import cint, convert_utc_to_user_timezone
+from frappe.utils import cint, convert_utc_to_system_timezone
 from frappe.utils.background_jobs import get_workers
 
 
 class RQWorker(Document):
 	def load_from_db(self):
-
 		all_workers = get_workers()
-		workers = [w for w in all_workers if w.pid == cint(self.name)]
+		workers = [w for w in all_workers if w.name == self.name]
 		if not workers:
 			raise frappe.DoesNotExistError
 		d = serialize_worker(workers[0])
@@ -59,21 +58,21 @@ def serialize_worker(worker: Worker) -> frappe._dict:
 	queue_types = ",".join(q.rsplit(":", 1)[1] for q in queue_names)
 
 	return frappe._dict(
-		name=worker.pid,
+		name=worker.name,
 		queue=queue,
 		queue_type=queue_types,
 		worker_name=worker.name,
 		status=worker.get_state(),
 		pid=worker.pid,
 		current_job_id=worker.get_current_job_id(),
-		last_heartbeat=convert_utc_to_user_timezone(worker.last_heartbeat),
-		birth_date=convert_utc_to_user_timezone(worker.birth_date),
+		last_heartbeat=convert_utc_to_system_timezone(worker.last_heartbeat),
+		birth_date=convert_utc_to_system_timezone(worker.birth_date),
 		successful_job_count=worker.successful_job_count,
 		failed_job_count=worker.failed_job_count,
 		total_working_time=worker.total_working_time,
 		_comment_count=0,
-		modified=convert_utc_to_user_timezone(worker.last_heartbeat),
-		creation=convert_utc_to_user_timezone(worker.birth_date),
+		modified=convert_utc_to_system_timezone(worker.last_heartbeat),
+		creation=convert_utc_to_system_timezone(worker.birth_date),
 		utilization_percent=compute_utilization(worker),
 	)
 

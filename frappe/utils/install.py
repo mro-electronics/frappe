@@ -15,6 +15,7 @@ def before_install():
 	frappe.reload_doc("desk", "doctype", "form_tour_step")
 	frappe.reload_doc("desk", "doctype", "form_tour")
 	frappe.reload_doc("core", "doctype", "doctype")
+	frappe.clear_cache()
 
 
 def after_install():
@@ -171,7 +172,7 @@ def before_tests():
 	if not int(frappe.db.get_single_value("System Settings", "setup_complete") or 0):
 		complete_setup_wizard()
 
-	frappe.db.set_value("Website Settings", "Website Settings", "disable_signup", 0)
+	frappe.db.set_single_value("Website Settings", "disable_signup", 0)
 	frappe.db.commit()
 	frappe.clear_cache()
 
@@ -257,13 +258,6 @@ def add_standard_navbar_items():
 			"item_label": "My Settings",
 			"item_type": "Action",
 			"action": "frappe.ui.toolbar.route_to_user()",
-			"is_standard": 1,
-		},
-		{
-			"item_label": "Manage Subscriptions",
-			"item_type": "Action",
-			"action": "frappe.ui.toolbar.redirectToUrl()",
-			"hidden": 1,
 			"is_standard": 1,
 		},
 		{

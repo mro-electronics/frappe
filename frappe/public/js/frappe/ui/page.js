@@ -47,8 +47,7 @@ frappe.ui.Page = class Page {
 
 	setup_scroll_handler() {
 		let last_scroll = 0;
-		window.addEventListener(
-			"scroll",
+		$(window).scroll(
 			frappe.utils.throttle(() => {
 				$(".page-head").toggleClass("drop-shadow", !!document.documentElement.scrollTop);
 				let current_scroll = document.documentElement.scrollTop;
@@ -58,8 +57,7 @@ frappe.ui.Page = class Page {
 					$(".page-head").css("top", "var(--navbar-height)");
 				}
 				last_scroll = current_scroll;
-			}),
-			500
+			}, 500)
 		);
 	}
 
@@ -171,7 +169,7 @@ frappe.ui.Page = class Page {
 		let sidebar_toggle = $(".page-head").find(".sidebar-toggle-btn");
 		let sidebar_wrapper = this.wrapper.find(".layout-side-section");
 		if (this.disable_sidebar_toggle || !sidebar_wrapper.length) {
-			sidebar_toggle.remove();
+			sidebar_toggle.last().remove();
 		} else {
 			sidebar_toggle.attr("title", __("Toggle Sidebar")).tooltip({
 				delay: { show: 600, hide: 100 },
@@ -190,14 +188,15 @@ frappe.ui.Page = class Page {
 	}
 
 	setup_overlay_sidebar() {
+		this.sidebar.find(".close-sidebar").remove();
 		let overlay_sidebar = this.sidebar.find(".overlay-sidebar").addClass("opened");
 		$('<div class="close-sidebar">').hide().appendTo(this.sidebar).fadeIn();
 		let scroll_container = $("html").css("overflow-y", "hidden");
 
-		this.sidebar.find(".close-sidebar").on("click", (e) => close_sidebar(e));
-		this.sidebar.on("click", "button:not(.dropdown-toggle)", (e) => close_sidebar(e));
+		this.sidebar.find(".close-sidebar").on("click", (e) => this.close_sidebar(e));
+		this.sidebar.on("click", "button:not(.dropdown-toggle)", (e) => this.close_sidebar(e));
 
-		let close_sidebar = () => {
+		this.close_sidebar = () => {
 			scroll_container.css("overflow-y", "");
 			this.sidebar.find("div.close-sidebar").fadeOut(() => {
 				overlay_sidebar
@@ -463,7 +462,12 @@ frappe.ui.Page = class Page {
 			`);
 		}
 
-		$link = $li.find("a").on("click", click);
+		$link = $li.find("a").on("click", (e) => {
+			if (e.ctrlKey || e.metaKey) {
+				frappe.open_in_new_tab = true;
+			}
+			return click();
+		});
 
 		if (standard) {
 			$li.appendTo(parent);
@@ -495,10 +499,15 @@ frappe.ui.Page = class Page {
 		}
 		// label
 		if (frappe.utils.is_mac()) {
-			shortcut_obj.shortcut_label = shortcut_obj.shortcut.replace("Ctrl", "⌘");
+			shortcut_obj.shortcut_label = shortcut_obj.shortcut
+				.replace("Ctrl", "⌘")
+				.replace("Alt", "⌥");
 		} else {
 			shortcut_obj.shortcut_label = shortcut_obj.shortcut;
 		}
+
+		shortcut_obj.shortcut_label = shortcut_obj.shortcut_label.replace("Shift", "⇧");
+
 		// actual shortcut string
 		shortcut_obj.shortcut = shortcut_obj.shortcut.toLowerCase();
 		// action is button click

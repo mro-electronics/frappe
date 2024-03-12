@@ -287,7 +287,7 @@ def user_linked_with_permission_on_doctype(doc, user):
 
 def apply_permissions_for_non_standard_user_type(doc, method=None):
 	"""Create user permission for the non standard user type"""
-	if not frappe.db.table_exists("User Type"):
+	if not frappe.db.table_exists("User Type") or frappe.flags.in_migrate:
 		return
 
 	user_types = frappe.cache().get_value(
@@ -312,7 +312,6 @@ def apply_permissions_for_non_standard_user_type(doc, method=None):
 				"User Permission", {"user": doc.get(data[1]), "allow": data[0], "for_value": doc.name}, "name"
 			)
 		):
-
 			perm_data = frappe.db.get_value(
 				"User Permission", {"allow": doc.doctype, "for_value": doc.name}, ["name", "user"]
 			)

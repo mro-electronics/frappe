@@ -11,6 +11,7 @@ frappe.views.CalendarView = class CalendarView extends frappe.views.ListView {
 			const doctype = route[1];
 			const user_settings = frappe.get_user_settings(doctype)["Calendar"] || {};
 			route.push(user_settings.last_calendar || "default");
+			frappe.route_flags.replace_route = true;
 			frappe.set_route(route);
 			return true;
 		} else {
@@ -120,6 +121,7 @@ frappe.views.Calendar = class Calendar {
 			start: "start",
 			end: "end",
 			allDay: "all_day",
+			convertToUserTz: "convert_to_user_tz",
 		};
 		this.color_map = {
 			danger: "red",
@@ -262,6 +264,12 @@ frappe.views.Calendar = class Calendar {
 			defaultView: defaults.defaultView,
 			weekends: defaults.weekends,
 			nowIndicator: true,
+			buttonText: {
+				today: __("Today"),
+				month: __("Month"),
+				week: __("Week"),
+				day: __("Day"),
+			},
 			events: function (start, end, timezone, callback) {
 				return frappe.call({
 					method: me.get_events_method || "frappe.desk.calendar.get_events",
@@ -371,11 +379,17 @@ frappe.views.Calendar = class Calendar {
 				d[target] = d[source];
 			});
 
-			if (!me.field_map.allDay) d.allDay = 1;
+			if (typeof d.allDay === "undefined") {
+				d.allDay = me.field_map.allDay;
+			}
+
+			if (!me.field_map.convertToUserTz) d.convertToUserTz = 1;
 
 			// convert to user tz
-			d.start = frappe.datetime.convert_to_user_tz(d.start);
-			d.end = frappe.datetime.convert_to_user_tz(d.end);
+			if (d.convertToUserTz) {
+				d.start = frappe.datetime.convert_to_user_tz(d.start);
+				d.end = frappe.datetime.convert_to_user_tz(d.end);
+			}
 
 			// show event on single day if start or end date is invalid
 			if (!frappe.datetime.validate(d.start) && d.end) {

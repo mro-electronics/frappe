@@ -48,17 +48,6 @@ frappe.ui.form.Layout = class Layout {
 		this.setup_events();
 	}
 
-	show_empty_form_message() {
-		if (
-			!(
-				this.wrapper.find(".frappe-control:visible").length ||
-				this.wrapper.find(".section-head.collapsed").length
-			)
-		) {
-			this.show_message(__("This form does not have any input"));
-		}
-	}
-
 	get_doctype_fields() {
 		let fields = [this.get_new_name_field()];
 		if (this.doctype_layout) {
@@ -198,12 +187,14 @@ frappe.ui.form.Layout = class Layout {
 	replace_field(fieldname, df, render) {
 		df.fieldname = fieldname; // change of fieldname is avoided
 		if (this.fields_dict[fieldname] && this.fields_dict[fieldname].df) {
-			const fieldobj = this.init_field(df, render);
-			this.fields_dict[fieldname].$wrapper.remove();
-			this.fields_list.splice(this.fields_dict[fieldname], 1, fieldobj);
+			const prev_fieldobj = this.fields_dict[fieldname];
+			const fieldobj = this.init_field(df, prev_fieldobj.parent, render);
+			prev_fieldobj.$wrapper.replaceWith(fieldobj.$wrapper);
+			const idx = this.fields_list.findIndex((e) => e == prev_fieldobj);
+			this.fields_list.splice(idx, 1, fieldobj);
 			this.fields_dict[fieldname] = fieldobj;
-			this.section.fields_list.splice(this.section.fields_dict[fieldname], 1, fieldobj);
-			this.section.fields_dict[fieldname] = fieldobj;
+			this.sections.forEach((section) => section.replace_field(fieldname, fieldobj));
+			prev_fieldobj.tab?.replace_field(fieldobj);
 			this.refresh_fields([df]);
 		}
 	}
@@ -212,7 +203,8 @@ frappe.ui.form.Layout = class Layout {
 		!this.section && this.make_section();
 		!this.column && this.make_column();
 
-		const fieldobj = this.init_field(df, render);
+		const parent = this.column.wrapper.get(0);
+		const fieldobj = this.init_field(df, parent, render);
 		this.fields_list.push(fieldobj);
 		this.fields_dict[df.fieldname] = fieldobj;
 
@@ -227,11 +219,11 @@ frappe.ui.form.Layout = class Layout {
 		}
 	}
 
-	init_field(df, render = false) {
+	init_field(df, parent, render = false) {
 		const fieldobj = frappe.ui.form.make_control({
 			df: df,
 			doctype: this.doctype,
-			parent: this.column.wrapper.get(0),
+			parent: parent,
 			frm: this.frm,
 			render_input: render,
 			doc: this.doc,
@@ -456,10 +448,37 @@ frappe.ui.form.Layout = class Layout {
 	}
 
 	setup_events() {
+		let last_scroll = 0;
+		let tabs_list = $(".form-tabs-list");
+		let tabs_content = this.tabs_content[0];
+		if (!tabs_list.length) return;
+
+		$(window).scroll(
+			frappe.utils.throttle(() => {
+				let current_scroll = document.documentElement.scrollTop;
+				if (current_scroll > 0 && last_scroll <= current_scroll) {
+					tabs_list.removeClass("form-tabs-sticky-down");
+					tabs_list.addClass("form-tabs-sticky-up");
+				} else {
+					tabs_list.removeClass("form-tabs-sticky-up");
+					tabs_list.addClass("form-tabs-sticky-down");
+				}
+				last_scroll = current_scroll;
+			}, 500)
+		);
+
 		this.tabs_list.off("click").on("click", ".nav-link", (e) => {
 			e.preventDefault();
 			e.stopImmediatePropagation();
 			$(e.currentTarget).tab("show");
+			if (tabs_content.getBoundingClientRect().top < 100) {
+				tabs_content.scrollIntoView();
+				setTimeout(() => {
+					$(".page-head").css("top", "-15px");
+					$(".form-tabs-list").removeClass("form-tabs-sticky-down");
+					$(".form-tabs-list").addClass("form-tabs-sticky-up");
+				}, 3);
+			}
 		});
 	}
 

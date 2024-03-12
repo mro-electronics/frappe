@@ -5,26 +5,34 @@ import io
 import json
 import os
 from datetime import date, datetime, time, timedelta
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal, localcontext
 from enum import Enum
 from mimetypes import guess_type
 from unittest.mock import patch
 
 import pytz
+from hypothesis import given
+from hypothesis import strategies as st
 from PIL import Image
 
 import frappe
 from frappe.installer import parse_app_name
-from frappe.tests.utils import FrappeTestCase
+from frappe.tests.utils import FrappeTestCase, change_settings
 from frappe.utils import (
 	ceil,
 	evaluate_filters,
+	execute_in_shell,
 	floor,
+	flt,
 	format_timedelta,
 	get_bench_path,
+	get_file_timestamp,
+	get_site_info,
+	get_sites,
 	get_url,
 	money_in_words,
 	parse_timedelta,
+	safe_json_loads,
 	scrub_urls,
 	validate_email_address,
 	validate_url,
@@ -32,12 +40,16 @@ from frappe.utils import (
 from frappe.utils.data import (
 	add_to_date,
 	cast,
+	cstr,
+	expand_relative_urls,
 	get_first_day_of_week,
 	get_time,
 	get_timedelta,
 	getdate,
 	now_datetime,
 	nowtime,
+	rounded,
+	sha256_hash,
 	validate_python_code,
 )
 from frappe.utils.dateutils import get_dates_from_timegrain
@@ -60,7 +72,8 @@ class TestFilters(FrappeTestCase):
 		)
 		self.assertFalse(
 			evaluate_filters(
-				{"doctype": "User", "status": "Open", "name": "Test 1"}, {"status": "Closed", "name": "Test 1"}
+				{"doctype": "User", "status": "Open", "name": "Test 1"},
+				{"status": "Closed", "name": "Test 1"},
 			)
 		)
 
@@ -101,6 +114,33 @@ class TestFilters(FrappeTestCase):
 		self.assertFalse(
 			evaluate_filters(
 				{"doctype": "User", "status": "Open", "age": 20}, {"status": "Open", "age": (">", 30)}
+			)
+		)
+
+	def test_date_time(self):
+		# date fields
+		self.assertTrue(
+			evaluate_filters(
+				{"doctype": "User", "birth_date": "2023-02-28"}, [("User", "birth_date", ">", "01-04-2022")]
+			)
+		)
+		self.assertFalse(
+			evaluate_filters(
+				{"doctype": "User", "birth_date": "2023-02-28"}, [("User", "birth_date", "<", "28-02-2023")]
+			)
+		)
+
+		# datetime fields
+		self.assertTrue(
+			evaluate_filters(
+				{"doctype": "User", "last_active": "2023-02-28 15:14:56"},
+				[("User", "last_active", ">", "01-04-2022 00:00:00")],
+			)
+		)
+		self.assertFalse(
+			evaluate_filters(
+				{"doctype": "User", "last_active": "2023-02-28 15:14:56"},
+				[("User", "last_active", "<", "28-02-2023 00:00:00")],
 			)
 		)
 
@@ -161,9 +201,7 @@ class TestDataManipulation(FrappeTestCase):
 		self.assertTrue(f'<a href="{url}/about">Test link 2</a>' in html)
 		self.assertTrue(f'<a href="{url}/login">Test link 3</a>' in html)
 		self.assertTrue(f'<img src="{url}/assets/frappe/test.jpg">' in html)
-		self.assertTrue(
-			f"style=\"background-image: url('{url}/assets/frappe/bg.jpg') !important\"" in html
-		)
+		self.assertTrue(f"style=\"background-image: url('{url}/assets/frappe/bg.jpg') !important\"" in html)
 		self.assertTrue('<a href="mailto:test@example.com">email</a>' in html)
 
 
@@ -283,9 +321,7 @@ class TestValidationUtils(FrappeTestCase):
 		# Scheme validation
 		self.assertFalse(validate_url("https://google.com", valid_schemes="http"))
 		self.assertTrue(validate_url("ftp://frappe.cloud", valid_schemes=["https", "ftp"]))
-		self.assertFalse(
-			validate_url("bolo://frappe.io", valid_schemes=("http", "https", "ftp", "ftps"))
-		)
+		self.assertFalse(validate_url("bolo://frappe.io", valid_schemes=("http", "https", "ftp", "ftps")))
 		self.assertRaises(
 			frappe.ValidationError, validate_url, "gopher://frappe.io", valid_schemes="https", throw=True
 		)
@@ -304,9 +340,7 @@ class TestValidationUtils(FrappeTestCase):
 		self.assertFalse(validate_email_address("someone@----.com"))
 
 		# Invalid with throw
-		self.assertRaises(
-			frappe.InvalidEmailAddressError, validate_email_address, "someone.com", throw=True
-		)
+		self.assertRaises(frappe.InvalidEmailAddressError, validate_email_address, "someone.com", throw=True)
 
 
 class TestImage(FrappeTestCase):
@@ -350,7 +384,7 @@ class TestPythonExpressions(FrappeTestCase):
 			try:
 				validate_python_code(expr)
 			except Exception as e:
-				self.fail(f"Invalid error thrown for valid expression: {expr}: {str(e)}")
+				self.fail(f"Invalid error thrown for valid expression: {expr}: {e!s}")
 
 	def test_validation_for_bad_python_expression(self):
 		invalid_expressions = [
@@ -417,20 +451,12 @@ class TestDateUtils(FrappeTestCase):
 			)
 
 		# Sunday as start of the week
-		self.assertEqual(
-			frappe.utils.get_first_day_of_week("2020-12-25"), frappe.utils.getdate("2020-12-20")
-		)
-		self.assertEqual(
-			frappe.utils.get_first_day_of_week("2020-12-21"), frappe.utils.getdate("2020-12-20")
-		)
+		self.assertEqual(frappe.utils.get_first_day_of_week("2020-12-25"), frappe.utils.getdate("2020-12-20"))
+		self.assertEqual(frappe.utils.get_first_day_of_week("2020-12-21"), frappe.utils.getdate("2020-12-20"))
 
 	def test_last_day_of_week(self):
-		self.assertEqual(
-			frappe.utils.get_last_day_of_week("2020-12-24"), frappe.utils.getdate("2020-12-26")
-		)
-		self.assertEqual(
-			frappe.utils.get_last_day_of_week("2020-12-28"), frappe.utils.getdate("2021-01-02")
-		)
+		self.assertEqual(frappe.utils.get_last_day_of_week("2020-12-24"), frappe.utils.getdate("2020-12-26"))
+		self.assertEqual(frappe.utils.get_last_day_of_week("2020-12-28"), frappe.utils.getdate("2021-01-02"))
 
 	def test_get_time(self):
 		datetime_input = now_datetime()
@@ -457,6 +483,7 @@ class TestDateUtils(FrappeTestCase):
 		self.assertIsInstance(get_timedelta(str(datetime_input)), timedelta)
 		self.assertIsInstance(get_timedelta(str(timedelta_input)), timedelta)
 		self.assertIsInstance(get_timedelta(str(time_input)), timedelta)
+		self.assertIsInstance(get_timedelta(get_timedelta("100:2:12")), timedelta)
 
 	def test_date_from_timegrain(self):
 		start_date = getdate("2021-01-01")
@@ -519,7 +546,7 @@ class TestResponse(FrappeTestCase):
 
 		self.assertTrue(all([isinstance(x, str) for x in processed_object["time_types"]]))
 		self.assertTrue(all([isinstance(x, float) for x in processed_object["float"]]))
-		self.assertTrue(all([isinstance(x, (list, str)) for x in processed_object["iter"]]))
+		self.assertTrue(all([isinstance(x, list | str) for x in processed_object["iter"]]))
 		self.assertIsInstance(processed_object["string"], str)
 		with self.assertRaises(TypeError):
 			json.dumps(BAD_OBJECT, default=json_handler)
@@ -531,9 +558,7 @@ class TestTimeDeltaUtils(FrappeTestCase):
 		self.assertEqual(format_timedelta(timedelta(hours=10)), "10:00:00")
 		self.assertEqual(format_timedelta(timedelta(hours=100)), "100:00:00")
 		self.assertEqual(format_timedelta(timedelta(seconds=100, microseconds=129)), "0:01:40.000129")
-		self.assertEqual(
-			format_timedelta(timedelta(seconds=100, microseconds=12212199129)), "3:25:12.199129"
-		)
+		self.assertEqual(format_timedelta(timedelta(seconds=100, microseconds=12212199129)), "3:25:12.199129")
 
 	def test_parse_timedelta(self):
 		self.assertEqual(parse_timedelta("0:0:0"), timedelta(seconds=0))
@@ -695,3 +720,208 @@ class TestLocks(FrappeTestCase):
 			with self.assertRaises(LockTimeoutError):
 				with filelock(lock_name, timeout=1, is_global=True):
 					self.fail("Global locks not working")
+
+
+class TestMiscUtils(FrappeTestCase):
+	def test_get_file_timestamp(self):
+		self.assertIsInstance(get_file_timestamp(__file__), str)
+
+	def test_execute_in_shell(self):
+		err, out = execute_in_shell("ls")
+		self.assertIn("apps", cstr(out))
+
+	def test_get_all_sites(self):
+		self.assertIn(frappe.local.site, get_sites())
+
+	def test_safe_json_load(self):
+		self.assertEqual(safe_json_loads("{}"), {})
+		self.assertEqual(safe_json_loads("{ /}"), "{ /}")
+		self.assertEqual(safe_json_loads("12"), 12)  # this is a quirk
+
+	def test_url_expansion(self):
+		unchanged_links = [
+			"<a href='tel:12345432'>My Phone</a>)",
+			"<a href='mailto:hello@example.com'>My Email</a>)",
+			"<a href='data:hello@example.com'>Data</a>)",
+		]
+		for link in unchanged_links:
+			self.assertEqual(link, expand_relative_urls(link))
+
+		site = get_url()
+
+		transforms = [("<a href='/about'>About</a>)", f"<a href='{site}/about'>About</a>)")]
+		for input, output in transforms:
+			self.assertEqual(output, expand_relative_urls(input))
+
+
+class TestTBSanitization(FrappeTestCase):
+	def test_traceback_sanitzation(self):
+		try:
+			password = "42"  # noqa: F841
+			args = {"password": "42", "pwd": "42", "safe": "safe_value"}
+			args = frappe._dict({"password": "42", "pwd": "42", "safe": "safe_value"})  # noqa: F841
+			raise Exception
+		except Exception:
+			traceback = frappe.get_traceback(with_context=True)
+			self.assertNotIn("42", traceback)
+			self.assertIn("********", traceback)
+			self.assertIn("password =", traceback)
+			self.assertIn("safe_value", traceback)
+
+
+class TestRounding(FrappeTestCase):
+	@change_settings("System Settings", {"rounding_method": "Commercial Rounding"})
+	def test_normal_rounding(self):
+		self.assertEqual(flt("what"), 0)
+
+		self.assertEqual(flt("0.5", 0), 1)
+		self.assertEqual(flt("0.3"), 0.3)
+
+		self.assertEqual(flt("1.5", 0), 2)
+
+		# positive rounding to integers
+		self.assertEqual(flt(0.4, 0), 0)
+		self.assertEqual(flt(0.5, 0), 1)
+		self.assertEqual(flt(1.455, 0), 1)
+		self.assertEqual(flt(1.5, 0), 2)
+
+		# negative rounding to integers
+		self.assertEqual(flt(-0.5, 0), -1)
+		self.assertEqual(flt(-1.5, 0), -2)
+
+		# negative precision i.e. round to nearest 10th
+		self.assertEqual(flt(123, -1), 120)
+		self.assertEqual(flt(125, -1), 130)
+		self.assertEqual(flt(134.45, -1), 130)
+		self.assertEqual(flt(135, -1), 140)
+
+		# positive multiple digit rounding
+		self.assertEqual(flt(1.25, 1), 1.3)
+		self.assertEqual(flt(0.15, 1), 0.2)
+
+		# negative multiple digit rounding
+		self.assertEqual(flt(-1.25, 1), -1.3)
+		self.assertEqual(flt(-0.15, 1), -0.2)
+
+	def test_normal_rounding_as_argument(self):
+		rounding_method = "Commercial Rounding"
+
+		self.assertEqual(flt("0.5", 0, rounding_method=rounding_method), 1)
+		self.assertEqual(flt("0.3", rounding_method=rounding_method), 0.3)
+
+		self.assertEqual(flt("1.5", 0, rounding_method=rounding_method), 2)
+
+		# positive rounding to integers
+		self.assertEqual(flt(0.4, 0, rounding_method=rounding_method), 0)
+		self.assertEqual(flt(0.5, 0, rounding_method=rounding_method), 1)
+		self.assertEqual(flt(1.455, 0, rounding_method=rounding_method), 1)
+		self.assertEqual(flt(1.5, 0, rounding_method=rounding_method), 2)
+
+		# negative rounding to integers
+		self.assertEqual(flt(-0.5, 0, rounding_method=rounding_method), -1)
+		self.assertEqual(flt(-1.5, 0, rounding_method=rounding_method), -2)
+
+		# negative precision i.e. round to nearest 10th
+		self.assertEqual(flt(123, -1, rounding_method=rounding_method), 120)
+		self.assertEqual(flt(125, -1, rounding_method=rounding_method), 130)
+		self.assertEqual(flt(134.45, -1, rounding_method=rounding_method), 130)
+		self.assertEqual(flt(135, -1, rounding_method=rounding_method), 140)
+
+		# positive multiple digit rounding
+		self.assertEqual(flt(1.25, 1, rounding_method=rounding_method), 1.3)
+		self.assertEqual(flt(0.15, 1, rounding_method=rounding_method), 0.2)
+		self.assertEqual(flt(2.675, 2, rounding_method=rounding_method), 2.68)
+
+		# negative multiple digit rounding
+		self.assertEqual(flt(-1.25, 1, rounding_method=rounding_method), -1.3)
+		self.assertEqual(flt(-0.15, 1, rounding_method=rounding_method), -0.2)
+
+		# Nearest number and not even (the default behaviour)
+		self.assertEqual(flt(0.5, 0, rounding_method=rounding_method), 1)
+		self.assertEqual(flt(1.5, 0, rounding_method=rounding_method), 2)
+		self.assertEqual(flt(2.5, 0, rounding_method=rounding_method), 3)
+		self.assertEqual(flt(3.5, 0, rounding_method=rounding_method), 4)
+
+		self.assertEqual(flt(0.05, 1, rounding_method=rounding_method), 0.1)
+		self.assertEqual(flt(1.15, 1, rounding_method=rounding_method), 1.2)
+		self.assertEqual(flt(2.25, 1, rounding_method=rounding_method), 2.3)
+		self.assertEqual(flt(3.35, 1, rounding_method=rounding_method), 3.4)
+
+	@change_settings("System Settings", {"rounding_method": "Commercial Rounding"})
+	@given(st.decimals(min_value=-1e8, max_value=1e8), st.integers(min_value=-2, max_value=4))
+	def test_normal_rounding_property(self, number, precision):
+		with localcontext() as ctx:
+			ctx.rounding = ROUND_HALF_UP
+			self.assertEqual(Decimal(str(flt(float(number), precision))), round(number, precision))
+
+	def test_bankers_rounding(self):
+		rounding_method = "Banker's Rounding"
+
+		self.assertEqual(rounded(0, 0, rounding_method=rounding_method), 0)
+		self.assertEqual(rounded(5.551115123125783e-17, 2, rounding_method=rounding_method), 0.0)
+
+		self.assertEqual(flt("0.5", 0, rounding_method=rounding_method), 0)
+		self.assertEqual(flt("0.3", rounding_method=rounding_method), 0.3)
+
+		self.assertEqual(flt("1.5", 0, rounding_method=rounding_method), 2)
+
+		# positive rounding to integers
+		self.assertEqual(flt(0.4, 0, rounding_method=rounding_method), 0)
+		self.assertEqual(flt(0.5, 0, rounding_method=rounding_method), 0)
+		self.assertEqual(flt(1.455, 0, rounding_method=rounding_method), 1)
+		self.assertEqual(flt(1.5, 0, rounding_method=rounding_method), 2)
+
+		# negative rounding to integers
+		self.assertEqual(flt(-0.5, 0, rounding_method=rounding_method), 0)
+		self.assertEqual(flt(-1.5, 0, rounding_method=rounding_method), -2)
+
+		# negative precision i.e. round to nearest 10th
+		self.assertEqual(flt(123, -1, rounding_method=rounding_method), 120)
+		self.assertEqual(flt(125, -1, rounding_method=rounding_method), 120)
+		self.assertEqual(flt(134.45, -1, rounding_method=rounding_method), 130)
+		self.assertEqual(flt(135, -1, rounding_method=rounding_method), 140)
+
+		# positive multiple digit rounding
+		self.assertEqual(flt(1.25, 1, rounding_method=rounding_method), 1.2)
+		self.assertEqual(flt(0.15, 1, rounding_method=rounding_method), 0.2)
+		self.assertEqual(flt(2.675, 2, rounding_method=rounding_method), 2.68)
+		self.assertEqual(flt(-2.675, 2, rounding_method=rounding_method), -2.68)
+
+		# negative multiple digit rounding
+		self.assertEqual(flt(-1.25, 1, rounding_method=rounding_method), -1.2)
+		self.assertEqual(flt(-0.15, 1, rounding_method=rounding_method), -0.2)
+
+		# Nearest number and not even (the default behaviour)
+		self.assertEqual(flt(0.5, 0, rounding_method=rounding_method), 0)
+		self.assertEqual(flt(1.5, 0, rounding_method=rounding_method), 2)
+		self.assertEqual(flt(2.5, 0, rounding_method=rounding_method), 2)
+		self.assertEqual(flt(3.5, 0, rounding_method=rounding_method), 4)
+
+		self.assertEqual(flt(0.05, 1, rounding_method=rounding_method), 0.0)
+		self.assertEqual(flt(1.15, 1, rounding_method=rounding_method), 1.2)
+		self.assertEqual(flt(2.25, 1, rounding_method=rounding_method), 2.2)
+		self.assertEqual(flt(3.35, 1, rounding_method=rounding_method), 3.4)
+
+		self.assertEqual(flt(-0.5, 0, rounding_method=rounding_method), 0)
+		self.assertEqual(flt(-1.5, 0, rounding_method=rounding_method), -2)
+		self.assertEqual(flt(-2.5, 0, rounding_method=rounding_method), -2)
+		self.assertEqual(flt(-3.5, 0, rounding_method=rounding_method), -4)
+
+		self.assertEqual(flt(-0.05, 1, rounding_method=rounding_method), 0.0)
+		self.assertEqual(flt(-1.15, 1, rounding_method=rounding_method), -1.2)
+		self.assertEqual(flt(-2.25, 1, rounding_method=rounding_method), -2.2)
+		self.assertEqual(flt(-3.35, 1, rounding_method=rounding_method), -3.4)
+
+	@change_settings("System Settings", {"rounding_method": "Banker's Rounding"})
+	@given(st.decimals(min_value=-1e8, max_value=1e8), st.integers(min_value=-2, max_value=4))
+	def test_bankers_rounding_property(self, number, precision):
+		self.assertEqual(Decimal(str(flt(float(number), precision))), round(number, precision))
+
+
+class TestCrypto(FrappeTestCase):
+	def test_hashing(self):
+		self.assertEqual(sha256_hash(""), "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855")
+		self.assertEqual(
+			sha256_hash(b"The quick brown fox jumps over the lazy dog"),
+			"d7a8fbb307d7809469ca9abcb0082e4f8d5651e46d3cdb762d02d0bf37c9e592",
+		)

@@ -1,6 +1,8 @@
 # Copyright (c) 2022, Frappe Technologies Pvt. Ltd. and Contributors
 # License: MIT. See LICENSE
 
+import contextlib
+import functools
 import json
 import os
 from textwrap import dedent
@@ -36,14 +38,18 @@ BENCH_START_MESSAGE = dedent(
 
 
 def atomic(method):
+	@functools.wraps(method)
 	def wrapper(*args, **kwargs):
 		try:
 			ret = method(*args, **kwargs)
 			frappe.db.commit()
 			return ret
-		except Exception:
-			frappe.db.rollback()
-			raise
+		except Exception as e:
+			# database itself can be gone while attempting rollback.
+			# We should preserve original exception in this case.
+			with contextlib.suppress(Exception):
+				frappe.db.rollback()
+			raise e
 
 	return wrapper
 
@@ -70,6 +76,7 @@ class SiteMigration:
 		"""Complete setup required for site migration"""
 		frappe.flags.touched_tables = set()
 		self.touched_tables_file = frappe.get_site_path("touched_tables.json")
+		frappe.clear_cache()
 		add_column(doctype="DocType", column_name="migration_hash", fieldtype="Data")
 		clear_global_cache()
 
@@ -90,8 +97,8 @@ class SiteMigration:
 			json.dump(list(frappe.flags.touched_tables), f, sort_keys=True, indent=4)
 
 		if not self.skip_search_index:
-			print(f"Building search index for {frappe.local.site}")
-			build_index_for_all_routes()
+			print(f"Queued rebuilding of search index for {frappe.local.site}")
+			frappe.enqueue(build_index_for_all_routes, queue="long")
 
 		frappe.publish_realtime("version-update")
 		frappe.flags.touched_tables.clear()

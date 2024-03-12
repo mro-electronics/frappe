@@ -1,13 +1,17 @@
 # Copyright (c) 2015, Frappe Technologies Pvt. Ltd. and Contributors
 # License: MIT. See LICENSE
 import datetime
+from contextlib import contextmanager
+from unittest.mock import MagicMock, patch
 
 import frappe
+from frappe.core.doctype.doctype.test_doctype import new_doctype
 from frappe.core.page.permission_manager.permission_manager import add, reset, update
 from frappe.custom.doctype.property_setter.property_setter import make_property_setter
+from frappe.database.utils import DefaultOrderBy
 from frappe.desk.reportview import get_filters_cond
 from frappe.handler import execute_cmd
-from frappe.model.db_query import DatabaseQuery
+from frappe.model.db_query import DatabaseQuery, get_between_date_filter
 from frappe.permissions import add_user_permission, clear_user_permissions_for_doctype
 from frappe.query_builder import Column
 from frappe.tests.utils import FrappeTestCase
@@ -16,9 +20,43 @@ from frappe.utils.testutils import add_custom_field, clear_custom_fields
 test_dependencies = ["User", "Blog Post", "Blog Category", "Blogger"]
 
 
+@contextmanager
+def setup_test_user(set_user=False):
+	test_user = frappe.get_doc("User", "test@example.com")
+	user_roles = frappe.get_roles()
+	test_user.remove_roles(*user_roles)
+	test_user.add_roles("Blogger")
+
+	if set_user:
+		frappe.set_user(test_user.name)
+
+	yield test_user
+
+	test_user.remove_roles("Blogger")
+	test_user.add_roles(*user_roles)
+
+
+@contextmanager
+def setup_patched_blog_post():
+	add_child_table_to_blog_post()
+	make_property_setter("Blog Post", "published", "permlevel", 1, "Int")
+	reset("Blog Post")
+	add("Blog Post", "Website Manager", 1)
+	update("Blog Post", "Website Manager", 1, "write", 1)
+	yield
+
+
+@contextmanager
+def enable_permlevel_restrictions():
+	frappe.db.set_single_value("System Settings", "apply_perm_level_on_api_calls", 1)
+	yield
+	frappe.db.set_single_value("System Settings", "apply_perm_level_on_api_calls", 0)
+
+
 class TestReportview(FrappeTestCase):
 	def setUp(self):
 		frappe.set_user("Administrator")
+		return super().setUp()
 
 	def test_basic(self):
 		self.assertTrue({"name": "DocType"} in DatabaseQuery("DocType").execute(limit_page_length=None))
@@ -51,10 +89,96 @@ class TestReportview(FrappeTestCase):
 		self.assertEqual(result[0].seen_by, "Administrator")
 		note.delete()
 
-	def test_link_field_syntax(self):
-		todo = frappe.get_doc(
-			doctype="ToDo", description="Test ToDo", allocated_to="Administrator"
+	def test_child_table_join(self):
+		frappe.delete_doc_if_exists("DocType", "Parent DocType 1")
+		frappe.delete_doc_if_exists("DocType", "Parent DocType 2")
+		frappe.delete_doc_if_exists("DocType", "Child DocType")
+		# child table
+		frappe.get_doc(
+			{
+				"doctype": "DocType",
+				"name": "Child DocType",
+				"module": "Custom",
+				"custom": 1,
+				"istable": 1,
+				"fields": [
+					{"label": "Title", "fieldname": "title", "fieldtype": "Data"},
+				],
+			}
 		).insert()
+		# doctype 1
+		frappe.get_doc(
+			{
+				"doctype": "DocType",
+				"name": "Parent DocType 1",
+				"module": "Custom",
+				"custom": 1,
+				"fields": [
+					{"label": "Title", "fieldname": "title", "fieldtype": "Data"},
+					{
+						"label": "Table Field 1",
+						"fieldname": "child",
+						"fieldtype": "Table",
+						"options": "Child DocType",
+					},
+				],
+				"permissions": [{"role": "System Manager"}],
+			}
+		).insert()
+		# doctype 2
+		frappe.get_doc(
+			{
+				"doctype": "DocType",
+				"name": "Parent DocType 2",
+				"module": "Custom",
+				"custom": 1,
+				"fields": [
+					{"label": "Title", "fieldname": "title", "fieldtype": "Data"},
+					{
+						"label": "Table Field 1",
+						"fieldname": "child",
+						"fieldtype": "Table",
+						"options": "Child DocType",
+					},
+				],
+				"permissions": [{"role": "System Manager"}],
+			}
+		).insert()
+
+		# clear records
+		frappe.db.delete("Parent DocType 1")
+		frappe.db.delete("Parent DocType 2")
+		frappe.db.delete("Child DocType")
+
+		# insert records
+		frappe.get_doc(
+			doctype="Parent DocType 1",
+			title="test",
+			child=[{"title": "parent 1 child record 1"}, {"title": "parent 1 child record 2"}],
+			__newname="test_parent",
+		).insert(ignore_if_duplicate=True)
+		frappe.get_doc(
+			doctype="Parent DocType 2",
+			title="test",
+			child=[{"title": "parent 2 child record 1"}],
+			__newname="test_parent",
+		).insert(ignore_if_duplicate=True)
+
+		# test query
+		results1 = frappe.get_all("Parent DocType 1", fields=["name", "child.title as child_title"])
+		results2 = frappe.get_all("Parent DocType 2", fields=["name", "child.title as child_title"])
+		# check both parents have same name
+		self.assertEqual(results1[0].name, results2[0].name)
+		# check both parents have different number of child records
+		self.assertEqual(len(results1), 2)
+		self.assertEqual(len(results2), 1)
+		parent1_children = [result.child_title for result in results1]
+		self.assertIn("parent 1 child record 1", parent1_children)
+		self.assertIn("parent 1 child record 2", parent1_children)
+		self.assertEqual(results2[0].child_title, "parent 2 child record 1")
+
+	def test_link_field_syntax(self):
+		todo = frappe.get_doc(doctype="ToDo", description="Test ToDo", allocated_to="Administrator").insert()
 		result = frappe.get_all(
 			"ToDo",
 			filters={"name": todo.name},
@@ -96,8 +220,6 @@ class TestReportview(FrappeTestCase):
 			assertion_string = """(((ifnull(cast(`tabBlog Post`.`name` as varchar), '')='' or cast(`tabBlog Post`.`name` as varchar) in ('-test-blog-post-1', '-test-blog-post'))))"""
 
 		self.assertEqual(build_match_conditions(as_condition=True), assertion_string)
-
-		frappe.set_user("Administrator")
 
 	def test_fields(self):
 		self.assertTrue(
@@ -143,9 +265,7 @@ class TestReportview(FrappeTestCase):
 			)
 
 	def test_none_filter(self):
-		query = frappe.qb.engine.get_query(
-			"DocType", fields="name", filters={"restrict_to_domain": None}
-		)
+		query = frappe.qb.get_query("DocType", fields="name", filters={"restrict_to_domain": None})
 		sql = str(query).replace("`", "").replace('"', "")
 		condition = "restrict_to_domain IS NULL"
 		self.assertIn(condition, sql)
@@ -170,7 +290,7 @@ class TestReportview(FrappeTestCase):
 		event1 = create_event(starts_on="2016-07-05 23:59:59")
 		event2 = create_event(starts_on="2016-07-06 00:00:00")
 		event3 = create_event(starts_on="2016-07-07 23:59:59")
-		event4 = create_event(starts_on="2016-07-08 00:00:01")
+		event4 = create_event(starts_on="2016-07-08 00:00:00")
 
 		# if the values are not passed in filters then event should be filter as current datetime
 		data = DatabaseQuery("Event").execute(filters={"starts_on": ["between", None]}, fields=["name"])
@@ -182,32 +302,62 @@ class TestReportview(FrappeTestCase):
 			filters={"starts_on": ["between", ["2016-07-06", "2016-07-07"]]}, fields=["name"]
 		)
 
-		self.assertTrue({"name": event2.name} in data)
-		self.assertTrue({"name": event3.name} in data)
-		self.assertTrue({"name": event1.name} not in data)
-		self.assertTrue({"name": event4.name} not in data)
+		self.assertIn({"name": event2.name}, data)
+		self.assertIn({"name": event3.name}, data)
+		self.assertNotIn({"name": event1.name}, data)
+		self.assertNotIn({"name": event4.name}, data)
 
 		# if only one value is passed in the filter
 		data = DatabaseQuery("Event").execute(
 			filters={"starts_on": ["between", ["2016-07-07"]]}, fields=["name"]
 		)
 
-		self.assertTrue({"name": event3.name} in data)
-		self.assertTrue({"name": event4.name} in data)
-		self.assertTrue({"name": todays_event.name} in data)
-		self.assertTrue({"name": event1.name} not in data)
-		self.assertTrue({"name": event2.name} not in data)
+		self.assertIn({"name": event3.name}, data)
+		self.assertIn({"name": event4.name}, data)
+		self.assertIn({"name": todays_event.name}, data)
+		self.assertNotIn({"name": event1.name}, data)
+		self.assertNotIn({"name": event2.name}, data)
 
 		# test between is formatted for creation column
 		data = DatabaseQuery("Event").execute(
 			filters={"creation": ["between", ["2016-07-06", "2016-07-07"]]}, fields=["name"]
 		)
 
+	def test_between_filters_date_bounds(self):
+		date_df = frappe._dict(fieldtype="Date")
+		datetime_df = frappe._dict(fieldtype="Datetime")
+		today = frappe.utils.nowdate()
+
+		# No filters -> assumes today
+		cond = get_between_date_filter("", date_df)
+		self.assertQueryEqual(cond, f"'{today}' AND '{today}'")
+
+		# One filter assumes "from" bound and to is today
+		start = "2021-01-01"
+		cond = get_between_date_filter([start], date_df)
+		self.assertQueryEqual(cond, f"'{start}' AND '{today}'")
+
+		# both date filters are applied
+		start = "2021-01-01"
+		end = "2022-01-02"
+		cond = get_between_date_filter([start, end], date_df)
+		self.assertQueryEqual(cond, f"'{start}' AND '{end}'")
+
+		# single date should include entire day
+		start = "2021-01-01"
+		cond = get_between_date_filter([start, start], datetime_df)
+		self.assertQueryEqual(cond, f"'{start} 00:00:00.000000' AND '{start} 23:59:59.999999'")
+
+		# datetime field on datetime type should remain same
+		start = "2021-01-01 01:01:00"
+		end = "2022-01-02 12:23:43"
+		cond = get_between_date_filter([start, end], datetime_df)
+		self.assertQueryEqual(cond, f"'{start}.000000' AND '{end}.000000'")
+
 	def test_ignore_permissions_for_get_filters_cond(self):
 		frappe.set_user("test2@example.com")
 		self.assertRaises(frappe.PermissionError, get_filters_cond, "DocType", dict(istable=1), [])
 		self.assertTrue(get_filters_cond("DocType", dict(istable=1), [], ignore_permissions=True))
-		frappe.set_user("Administrator")
 
 	def test_query_fields_sanitizer(self):
 		self.assertRaises(
@@ -370,7 +520,6 @@ class TestReportview(FrappeTestCase):
 			)
 
 	def test_nested_permission(self):
-		frappe.set_user("Administrator")
 		create_nested_doctype()
 		create_nested_doctype_records()
 		clear_user_permissions_for_doctype("Nested DocType")
@@ -394,7 +543,6 @@ class TestReportview(FrappeTestCase):
 		self.assertFalse({"name": "Level 1 B"} in data)
 		self.assertFalse({"name": "Level 2 B"} in data)
 		update("Nested DocType", "All", 0, "if_owner", 1)
-		frappe.set_user("Administrator")
 
 	def test_filter_sanitizer(self):
 		self.assertRaises(
@@ -505,7 +653,6 @@ class TestReportview(FrappeTestCase):
 			)
 
 	def test_of_not_of_descendant_ancestors(self):
-		frappe.set_user("Administrator")
 		clear_user_permissions_for_doctype("Nested DocType")
 
 		# in descendants filter
@@ -588,16 +735,29 @@ class TestReportview(FrappeTestCase):
 		self.assertTrue({"name": "Prepared Report"} in res)
 		self.assertFalse({"name": "Property Setter"} in res)
 
+		frappe.db.set_value("DocType", "Property Setter", "autoname", None, update_modified=False)
+
+		res = DatabaseQuery("DocType").execute(filters={"autoname": ["is", "set"]})
+		self.assertFalse({"name": "Property Setter"} in res)
+
 	def test_set_field_tables(self):
 		# Tests _in_standard_sql_methods method in test_set_field_tables
 		# The following query will break if the above method is broken
-		data = frappe.db.get_list(
+		frappe.db.get_list(
 			"Web Form",
 			filters=[["Web Form Field", "reqd", "=", 1]],
 			fields=["count(*) as count"],
 			order_by="count desc",
 			limit=50,
 		)
+
+	def test_virtual_field_get_list(self):
+		try:
+			frappe.get_list("Prepared Report", ["*"])
+			frappe.get_list("Scheduled Job Type", ["*"])
+		except Exception:
+			print(frappe.get_traceback())
+			self.fail("get_list not working with virtual field")
 
 	def test_pluck_name(self):
 		names = DatabaseQuery("DocType").execute(filters={"name": "DocType"}, pluck="name")
@@ -642,88 +802,140 @@ class TestReportview(FrappeTestCase):
 		self.assertEqual(users_unedited[0].modified, users_unedited[0].creation)
 		self.assertNotEqual(users_edited[0].modified, users_edited[0].creation)
 
-	def test_reportview_get(self):
-		user = frappe.get_doc("User", "test@example.com")
-		add_child_table_to_blog_post()
+	def test_permlevel_fields(self):
+		with enable_permlevel_restrictions(), setup_patched_blog_post(), setup_test_user(set_user=True):
+			data = frappe.get_list(
+				"Blog Post", filters={"published": 1}, fields=["name", "published"], limit=1
+			)
+			self.assertFalse("published" in data[0])
+			self.assertTrue("name" in data[0])
+			self.assertEqual(len(data[0]), 1)
 
-		user_roles = frappe.get_roles()
-		user.remove_roles(*user_roles)
-		user.add_roles("Blogger")
+			data = frappe.get_list(
+				"Blog Post", filters={"published": 1}, fields=["name", "`published`"], limit=1
+			)
+			self.assertFalse("published" in data[0])
+			self.assertTrue("name" in data[0])
+			self.assertEqual(len(data[0]), 1)
 
-		make_property_setter("Blog Post", "published", "permlevel", 1, "Int")
-		reset("Blog Post")
-		add("Blog Post", "Website Manager", 1)
-		update("Blog Post", "Website Manager", 1, "write", 1)
+			data = frappe.get_list(
+				"Blog Post", filters={"published": 1}, fields=["name", "`tabBlog Post`.`published`"], limit=1
+			)
+			self.assertFalse("published" in data[0])
+			self.assertTrue("name" in data[0])
+			self.assertEqual(len(data[0]), 1)
 
-		frappe.set_user(user.name)
+			data = frappe.get_list(
+				"Blog Post",
+				filters={"published": 1},
+				fields=["name", "`tabTest Child`.`test_field`"],
+				limit=1,
+			)
+			self.assertFalse("test_field" in data[0])
+			self.assertTrue("name" in data[0])
+			self.assertEqual(len(data[0]), 1)
 
-		frappe.local.request = frappe._dict()
-		frappe.local.request.method = "POST"
+			data = frappe.get_list(
+				"Blog Post", filters={"published": 1}, fields=["name", "MAX(`published`)"], limit=1
+			)
+			self.assertTrue("name" in data[0])
+			self.assertEqual(len(data[0]), 1)
 
-		frappe.local.form_dict = frappe._dict(
-			{
-				"doctype": "Blog Post",
-				"fields": ["published", "title", "`tabTest Child`.`test_field`"],
-			}
-		)
+			data = frappe.get_list(
+				"Blog Post", filters={"published": 1}, fields=["name", "LAST(published)"], limit=1
+			)
+			self.assertTrue("name" in data[0])
+			self.assertEqual(len(data[0]), 1)
 
-		# even if * is passed, fields which are not accessible should be filtered out
-		response = execute_cmd("frappe.desk.reportview.get")
-		self.assertListEqual(response["keys"], ["title"])
-		frappe.local.form_dict = frappe._dict(
-			{
-				"doctype": "Blog Post",
-				"fields": ["*"],
-			}
-		)
+			data = frappe.get_list(
+				"Blog Post",
+				filters={"published": 1},
+				fields=["name", "MAX(`modified`)"],
+				limit=1,
+				order_by=None,
+				group_by="name",
+			)
+			self.assertEqual(len(data[0]), 2)
 
-		response = execute_cmd("frappe.desk.reportview.get")
-		self.assertNotIn("published", response["keys"])
+			data = frappe.get_list(
+				"Blog Post", filters={"published": 1}, fields=["name", "now() abhi"], limit=1
+			)
+			self.assertIsInstance(data[0]["abhi"], datetime.datetime)
+			self.assertEqual(len(data[0]), 2)
 
-		frappe.set_user("Administrator")
-		user.add_roles("Website Manager")
-		frappe.set_user(user.name)
+			data = frappe.get_list("Blog Post", filters={"published": 1}, fields=["name", "'LABEL'"], limit=1)
+			self.assertTrue("name" in data[0])
+			self.assertTrue("LABEL" in data[0].values())
+			self.assertEqual(len(data[0]), 2)
 
-		frappe.set_user("Administrator")
+			data = frappe.get_list(
+				"Blog Post",
+				filters={"published": 1},
+				fields=["name", "COUNT(*) as count"],
+				limit=1,
+				order_by=None,
+				group_by="name",
+			)
+			self.assertTrue("count" in data[0])
+			self.assertEqual(len(data[0]), 2)
 
+			data = frappe.get_list(
+				"Blog Post",
+				filters={"published": 1},
+				fields=["name", "COUNT(*) count"],
+				limit=1,
+				order_by=None,
+				group_by="name",
+			)
+			self.assertTrue("count" in data[0])
+			self.assertEqual(len(data[0]), 2)
+
+			data = frappe.get_list(
+				"Blog Post",
+				fields=["name", "blogger.full_name as blogger_full_name", "blog_category.description"],
+				limit=1,
+			)
+			self.assertTrue("name" in data[0])
+			self.assertTrue("blogger_full_name" in data[0])
+			self.assertTrue("description" not in data[0])  # field does not exist
+
+	def test_reportview_get_permlevel_system_users(self):
+		with setup_patched_blog_post(), setup_test_user(set_user=True):
+			frappe.local.request = frappe._dict()
+			frappe.local.request.method = "POST"
+			frappe.local.form_dict = frappe._dict(
+				{
+					"doctype": "Blog Post",
+					"fields": ["published", "title", "`tabTest Child`.`test_field`"],
+				}
+			)
+
+			# even if * is passed, fields which are not accessible should be filtered out
+			response = execute_cmd("frappe.desk.reportview.get")
+			self.assertListEqual(response["keys"], ["title"])
+			frappe.local.form_dict = frappe._dict(
+				{
+					"doctype": "Blog Post",
+					"fields": ["*"],
+				}
+			)
+
+			response = execute_cmd("frappe.desk.reportview.get")
+			self.assertNotIn("published", response["keys"])
+
+	def test_reportview_get_admin(self):
 		# Admin should be able to see access all fields
-		frappe.local.form_dict = frappe._dict(
-			{
-				"doctype": "Blog Post",
-				"fields": ["published", "title", "`tabTest Child`.`test_field`"],
-			}
-		)
-
-		response = execute_cmd("frappe.desk.reportview.get")
-		self.assertListEqual(response["keys"], ["published", "title", "test_field"])
-
-		# reset user roles
-		user.remove_roles("Blogger", "Website Manager")
-		user.add_roles(*user_roles)
-
-	def test_reportview_get_aggregation(self):
-		# test aggregation based on child table field
-		frappe.local.form_dict = frappe._dict(
-			{
-				"doctype": "DocType",
-				"fields": """["`tabDocField`.`label` as field_label","`tabDocField`.`name` as field_name"]""",
-				"filters": "[]",
-				"order_by": "_aggregate_column desc",
-				"start": 0,
-				"page_length": 20,
-				"view": "Report",
-				"with_comment_count": 0,
-				"group_by": "field_label, field_name",
-				"aggregate_on_field": "columns",
-				"aggregate_on_doctype": "DocField",
-				"aggregate_function": "sum",
-			}
-		)
-
-		response = execute_cmd("frappe.desk.reportview.get")
-		self.assertListEqual(
-			response["keys"], ["field_label", "field_name", "_aggregate_column", "columns"]
-		)
+		with setup_patched_blog_post():
+			frappe.local.request = frappe._dict()
+			frappe.local.request.method = "POST"
+			frappe.local.form_dict = frappe._dict(
+				{
+					"doctype": "Blog Post",
+					"fields": ["published", "title", "`tabTest Child`.`test_field`"],
+				}
+			)
+			response = execute_cmd("frappe.desk.reportview.get")
+			self.assertListEqual(response["keys"], ["published", "title", "test_field"])
 
 	def test_cast_name(self):
 		from frappe.core.doctype.doctype.test_doctype import new_doctype
@@ -810,26 +1022,251 @@ class TestReportview(FrappeTestCase):
 		create_dashboard_settings(self.user)
 
 		dashboard_settings = frappe.db.sql(
-			"""
+			f"""
 				SELECT name
 				FROM `tabDashboard Settings`
-				WHERE {condition}
-			""".format(
-				condition=permission_query_conditions
-			),
+				WHERE {permission_query_conditions}
+			""",
 			as_dict=1,
 		)[0]
 
 		self.assertTrue(dashboard_settings)
 
+	def test_virtual_doctype(self):
+		"""Test that virtual doctypes can be queried using get_all"""
+
+		virtual_doctype = new_doctype("Virtual DocType")
+		virtual_doctype.is_virtual = 1
+		virtual_doctype.insert(ignore_if_duplicate=True)
+
+		class VirtualDocType:
+			@staticmethod
+			def get_list(args):
+				...
+
+		with patch("frappe.controllers", new={frappe.local.site: {"Virtual DocType": VirtualDocType}}):
+			VirtualDocType.get_list = MagicMock()
+
+			frappe.get_all("Virtual DocType", filters={"name": "test"}, fields=["name"], limit=1)
+
+			call_args = VirtualDocType.get_list.call_args[0][0]
+			VirtualDocType.get_list.assert_called_once()
+			self.assertIsInstance(call_args, dict)
+			self.assertEqual(call_args["doctype"], "Virtual DocType")
+			self.assertEqual(call_args["filters"], [["Virtual DocType", "name", "=", "test"]])
+			self.assertEqual(call_args["fields"], ["name"])
+			self.assertEqual(call_args["limit_page_length"], 1)
+			self.assertEqual(call_args["limit_start"], 0)
+			self.assertEqual(call_args["order_by"], DefaultOrderBy)
+
 	def test_coalesce_with_in_ops(self):
-		self.assertNotIn("ifnull", frappe.get_all("User", {"name": ("in", ["a", "b"])}, run=0))
-		self.assertIn("ifnull", frappe.get_all("User", {"name": ("in", ["a", None])}, run=0))
-		self.assertIn("ifnull", frappe.get_all("User", {"name": ("in", ["a", ""])}, run=0))
-		self.assertIn("ifnull", frappe.get_all("User", {"name": ("in", [])}, run=0))
-		self.assertIn("ifnull", frappe.get_all("User", {"name": ("not in", ["a"])}, run=0))
-		self.assertIn("ifnull", frappe.get_all("User", {"name": ("not in", [])}, run=0))
-		self.assertIn("ifnull", frappe.get_all("User", {"name": ("not in", [""])}, run=0))
+		self.assertNotIn("ifnull", frappe.get_all("User", {"first_name": ("in", ["a", "b"])}, run=0))
+		self.assertIn("ifnull", frappe.get_all("User", {"first_name": ("in", ["a", None])}, run=0))
+		self.assertIn("ifnull", frappe.get_all("User", {"first_name": ("in", ["a", ""])}, run=0))
+		self.assertIn("ifnull", frappe.get_all("User", {"first_name": ("in", [])}, run=0))
+		self.assertIn("ifnull", frappe.get_all("User", {"first_name": ("not in", ["a"])}, run=0))
+		self.assertIn("ifnull", frappe.get_all("User", {"first_name": ("not in", [])}, run=0))
+		self.assertIn("ifnull", frappe.get_all("User", {"first_name": ("not in", [""])}, run=0))
+
+		# primary key is never nullable
+		self.assertNotIn("ifnull", frappe.get_all("User", {"name": ("in", ["a", None])}, run=0))
+		self.assertNotIn("ifnull", frappe.get_all("User", {"name": ("in", ["a", ""])}, run=0))
+		self.assertNotIn("ifnull", frappe.get_all("User", {"name": ("in", (""))}, run=0))
+		self.assertNotIn("ifnull", frappe.get_all("User", {"name": ("in", ())}, run=0))
+
+	def test_ambiguous_linked_tables(self):
+		from frappe.desk.reportview import get
+
+		if not frappe.db.exists("DocType", "Related Todos"):
+			frappe.get_doc(
+				{
+					"doctype": "DocType",
+					"custom": 1,
+					"module": "Custom",
+					"name": "Related Todos",
+					"naming_rule": "Random",
+					"autoname": "hash",
+					"fields": [
+						{
+							"label": "Todo One",
+							"fieldname": "todo_one",
+							"fieldtype": "Link",
+							"options": "ToDo",
+							"reqd": 1,
+						},
+						{
+							"label": "Todo Two",
+							"fieldname": "todo_two",
+							"fieldtype": "Link",
+							"options": "ToDo",
+							"reqd": 1,
+						},
+					],
+				}
+			).insert()
+		else:
+			frappe.db.delete("Related Todos")
+
+		todo_one = frappe.get_doc(
+			{
+				"doctype": "ToDo",
+				"description": "Todo One",
+			}
+		).insert()
+
+		todo_two = frappe.get_doc(
+			{
+				"doctype": "ToDo",
+				"description": "Todo Two",
+			}
+		).insert()
+
+		frappe.get_doc(
+			{
+				"doctype": "Related Todos",
+				"todo_one": todo_one.name,
+				"todo_two": todo_two.name,
+			}
+		).insert()
+
+		frappe.form_dict.doctype = "Related Todos"
+		frappe.form_dict.fields = [
+			"`tabRelated Todos`.`name`",
+			"`tabRelated Todos`.`todo_one`",
+			"`tabRelated Todos`.`todo_two`",
+			# because ToDo.show_title_as_field_link = 1
+			"todo_one.description as todo_one_description",
+			"todo_two.description as todo_two_description",
+		]
+
+		# Shouldn't raise pymysql.err.OperationalError: (1066, "Not unique table/alias: 'tabToDo'")
+		data = get()
+		self.assertEqual(len(data["values"]), 1)
+
+
+class TestReportView(FrappeTestCase):
+	def setUp(self) -> None:
+		frappe.set_user("Administrator")
+		return super().setUp()
+
+	def test_get_count(self):
+		frappe.local.request = frappe._dict()
+		frappe.local.request.method = "GET"
+
+		# test with data check field
+		frappe.local.form_dict = frappe._dict(
+			{
+				"doctype": "DocType",
+				"filters": [["DocType", "show_title_field_in_link", "=", 1]],
+				"fields": [],
+				"distinct": "false",
+			}
+		)
+		list_filter_response = execute_cmd("frappe.desk.reportview.get_count")
+		frappe.local.form_dict = frappe._dict(
+			{"doctype": "DocType", "filters": {"show_title_field_in_link": 1}, "distinct": "true"}
+		)
+		dict_filter_response = execute_cmd("frappe.desk.reportview.get_count")
+		self.assertIsInstance(list_filter_response, int)
+		self.assertEqual(list_filter_response, dict_filter_response)
+
+		# test with child table filter
+		frappe.local.form_dict = frappe._dict(
+			{
+				"doctype": "DocType",
+				"filters": [["DocField", "fieldtype", "=", "Data"]],
+				"fields": [],
+				"distinct": "true",
+			}
+		)
+		child_filter_response = execute_cmd("frappe.desk.reportview.get_count")
+		current_value = frappe.db.sql(
+			# the below query is equivalent to the one in reportview.get_count
+			"select distinct count(distinct `tabDocType`.name) as total_count"
+			" from `tabDocType` left join `tabDocField`"
+			" on (`tabDocField`.parenttype = 'DocType' and `tabDocField`.parent = `tabDocType`.name)"
+			" where `tabDocField`.`fieldtype` = 'Data'"
+		)[0][0]
+		self.assertEqual(child_filter_response, current_value)
+
+	def test_reportview_get(self):
+		user = frappe.get_doc("User", "test@example.com")
+		add_child_table_to_blog_post()
+
+		user_roles = frappe.get_roles()
+		user.remove_roles(*user_roles)
+		user.add_roles("Blogger")
+
+		make_property_setter("Blog Post", "published", "permlevel", 1, "Int")
+		reset("Blog Post")
+		add("Blog Post", "Website Manager", 1)
+		update("Blog Post", "Website Manager", 1, "write", 1)
+
+		frappe.set_user(user.name)
+
+		frappe.local.request = frappe._dict()
+		frappe.local.request.method = "POST"
+
+		frappe.local.form_dict = frappe._dict(
+			{
+				"doctype": "Blog Post",
+				"fields": ["published", "title", "`tabTest Child`.`test_field`"],
+			}
+		)
+
+		# even if * is passed, fields which are not accessible should be filtered out
+		response = execute_cmd("frappe.desk.reportview.get")
+		self.assertListEqual(response["keys"], ["title"])
+		frappe.local.form_dict = frappe._dict(
+			{
+				"doctype": "Blog Post",
+				"fields": ["*"],
+			}
+		)
+
+		response = execute_cmd("frappe.desk.reportview.get")
+		self.assertNotIn("published", response["keys"])
+
+		frappe.set_user("Administrator")
+		user.add_roles("Website Manager")
+
+		# Admin should be able to see access all fields
+		frappe.local.form_dict = frappe._dict(
+			{
+				"doctype": "Blog Post",
+				"fields": ["published", "title", "`tabTest Child`.`test_field`"],
+			}
+		)
+
+		response = execute_cmd("frappe.desk.reportview.get")
+		self.assertListEqual(response["keys"], ["published", "title", "test_field"])
+
+		# reset user roles
+		user.remove_roles("Blogger", "Website Manager")
+		user.add_roles(*user_roles)
+
+	def test_reportview_get_aggregation(self):
+		# test aggregation based on child table field
+		frappe.local.request = frappe._dict(method="GET")
+		frappe.local.form_dict = frappe._dict(
+			{
+				"doctype": "DocType",
+				"fields": """["`tabDocField`.`label` as field_label","`tabDocField`.`name` as field_name"]""",
+				"filters": "[]",
+				"order_by": "_aggregate_column desc",
+				"start": 0,
+				"page_length": 20,
+				"view": "Report",
+				"with_comment_count": 0,
+				"group_by": "field_label, field_name",
+				"aggregate_on_field": "columns",
+				"aggregate_on_doctype": "DocField",
+				"aggregate_function": "sum",
+			}
+		)
+
+		response = execute_cmd("frappe.desk.reportview.get")
+		self.assertListEqual(response["keys"], ["field_label", "field_name", "_aggregate_column"])
 
 
 def add_child_table_to_blog_post():
@@ -855,7 +1292,7 @@ def create_event(subject="_Test Event", starts_on=None):
 
 	from frappe.utils import get_datetime
 
-	event = frappe.get_doc(
+	return frappe.get_doc(
 		{
 			"doctype": "Event",
 			"subject": subject,
@@ -863,8 +1300,6 @@ def create_event(subject="_Test Event", starts_on=None):
 			"starts_on": get_datetime(starts_on),
 		}
 	).insert(ignore_permissions=True)
-
-	return event
 
 
 def create_nested_doctype():

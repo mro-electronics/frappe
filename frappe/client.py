@@ -10,6 +10,7 @@ import frappe.utils
 from frappe import _
 from frappe.desk.reportview import validate_args
 from frappe.model.db_query import check_parent_permission
+from frappe.model.utils import is_virtual_doctype
 from frappe.utils import get_safe_filters
 
 if TYPE_CHECKING:
@@ -27,6 +28,7 @@ def get_list(
 	doctype,
 	fields=None,
 	filters=None,
+	group_by=None,
 	order_by=None,
 	limit_start=None,
 	limit_page_length=20,
@@ -52,6 +54,7 @@ def get_list(
 		fields=fields,
 		filters=filters,
 		or_filters=or_filters,
+		group_by=group_by,
 		order_by=order_by,
 		limit_start=limit_start,
 		limit_page_length=limit_page_length,
@@ -86,6 +89,10 @@ def get(doctype, name=None, filters=None, parent=None):
 		doc = frappe.get_doc(doctype)  # single
 
 	doc.check_permission()
+
+	if frappe.get_system_settings("apply_perm_level_on_api_calls"):
+		doc.apply_fieldlevel_read_permissions()
+
 	return doc.as_dict()
 
 
@@ -304,6 +311,17 @@ def has_permission(doctype, docname, perm_type="read"):
 
 
 @frappe.whitelist()
+def get_doc_permissions(doctype, docname):
+	"""Returns an evaluated document permissions dict like `{"read":1, "write":1}`
+
+	:param doctype: DocType of the document to be evaluated
+	:param docname: `name` of the document to be evaluated
+	"""
+	doc = frappe.get_doc(doctype, docname)
+	return {"permissions": frappe.permissions.get_doc_permissions(doc)}
+
+
+@frappe.whitelist()
 def get_password(doctype, name, fieldname):
 	"""Return a password type property. Only applicable for System Managers
 
@@ -418,6 +436,18 @@ def validate_link(doctype: str, docname: str, fields=None):
 		)
 
 	values = frappe._dict()
+
+	if is_virtual_doctype(doctype):
+		try:
+			frappe.get_doc(doctype, docname)
+			values.name = docname
+		except frappe.DoesNotExistError:
+			frappe.clear_last_message()
+			frappe.msgprint(
+				_("Document {0} {1} does not exist").format(frappe.bold(doctype), frappe.bold(docname)),
+			)
+		return values
+
 	values.name = frappe.db.get_value(doctype, docname, cache=True)
 
 	fields = frappe.parse_json(fields)

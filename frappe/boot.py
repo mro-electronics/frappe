@@ -8,10 +8,12 @@ import frappe
 import frappe.defaults
 import frappe.desk.desk_page
 from frappe.core.doctype.navbar_settings.navbar_settings import get_app_logo, get_navbar_settings
+from frappe.desk.doctype.form_tour.form_tour import get_onboarding_ui_tours
 from frappe.desk.doctype.route_history.route_history import frequently_visited_links
 from frappe.desk.form.load import get_meta_bundle
 from frappe.email.inbox import get_email_accounts
 from frappe.model.base_document import get_controller
+from frappe.permissions import has_permission
 from frappe.query_builder import DocType
 from frappe.query_builder.functions import Count
 from frappe.query_builder.terms import ParameterizedValueWrapper, SubQuery
@@ -19,14 +21,15 @@ from frappe.social.doctype.energy_point_log.energy_point_log import get_energy_p
 from frappe.social.doctype.energy_point_settings.energy_point_settings import (
 	is_energy_point_enabled,
 )
-from frappe.translate import get_lang_dict, get_messages_for_boot, get_translated_doctypes
-from frappe.utils import add_user_info, cstr, get_time_zone
+from frappe.utils import add_user_info, cstr, get_system_timezone
 from frappe.utils.change_log import get_versions
 from frappe.website.doctype.web_page_view.web_page_view import is_tracking_enabled
 
 
 def get_bootinfo():
 	"""build and return boot info"""
+	from frappe.translate import get_lang_dict, get_translated_doctypes
+
 	frappe.set_user_lang(frappe.session.user)
 	bootinfo = frappe._dict()
 	hooks = frappe.get_hooks()
@@ -67,6 +70,7 @@ def get_bootinfo():
 	bootinfo.home_folder = frappe.db.get_value("File", {"is_home_folder": 1})
 	bootinfo.navbar_settings = get_navbar_settings()
 	bootinfo.notification_settings = get_notification_settings()
+	bootinfo.onboarding_tours = get_onboarding_ui_tours()
 	set_time_zone(bootinfo)
 
 	# ipinfo
@@ -101,7 +105,7 @@ def get_bootinfo():
 	bootinfo.app_logo_url = get_app_logo()
 	bootinfo.link_title_doctypes = get_link_title_doctypes()
 	bootinfo.translated_doctypes = get_translated_doctypes()
-	bootinfo.subscription_expiry = add_subscription_expiry()
+	bootinfo.subscription_conf = add_subscription_conf()
 
 	return bootinfo
 
@@ -117,19 +121,19 @@ def get_letter_heads():
 
 
 def load_conf_settings(bootinfo):
-	from frappe import conf
+	from frappe.core.api.file import get_max_file_size
 
-	bootinfo.max_file_size = conf.get("max_file_size") or 10485760
+	bootinfo.max_file_size = get_max_file_size()
 	for key in ("developer_mode", "socketio_port", "file_watcher_port"):
-		if key in conf:
-			bootinfo[key] = conf.get(key)
+		if key in frappe.conf:
+			bootinfo[key] = frappe.conf.get(key)
 
 
 def load_desktop_data(bootinfo):
 	from frappe.desk.desktop import get_workspace_sidebar_items
 
 	bootinfo.allowed_workspaces = get_workspace_sidebar_items().get("pages")
-	bootinfo.module_page_map = get_controller("Workspace").get_module_page_map()
+	bootinfo.module_wise_workspaces = get_controller("Workspace").get_module_wise_workspaces()
 	bootinfo.dashboards = frappe.get_all("Dashboard")
 
 
@@ -173,9 +177,7 @@ def get_user_pages_or_reports(parent, cache=False):
 		frappe.qb.from_(customRole)
 		.from_(hasRole)
 		.from_(parentTable)
-		.select(
-			customRole[parent.lower()].as_("name"), customRole.modified, customRole.ref_doctype, *columns
-		)
+		.select(customRole[parent.lower()].as_("name"), customRole.modified, customRole.ref_doctype, *columns)
 		.where(
 			(hasRole.parent == customRole.name)
 			& (parentTable.name == customRole[parent.lower()])
@@ -198,9 +200,7 @@ def get_user_pages_or_reports(parent, cache=False):
 		.from_(parentTable)
 		.select(parentTable.name.as_("name"), parentTable.modified, *columns)
 		.where(
-			(hasRole.role.isin(roles))
-			& (hasRole.parent == parentTable.name)
-			& (parentTable.name.notin(subq))
+			(hasRole.role.isin(roles)) & (hasRole.parent == parentTable.name) & (parentTable.name.notin(subq))
 		)
 		.distinct()
 	)
@@ -222,7 +222,6 @@ def get_user_pages_or_reports(parent, cache=False):
 
 	# pages with no role are allowed
 	if parent == "Page":
-
 		pages_with_no_roles = (
 			frappe.qb.from_(parentTable)
 			.select(parentTable.name, parentTable.modified, *columns)
@@ -234,7 +233,10 @@ def get_user_pages_or_reports(parent, cache=False):
 				has_role[p.name] = {"modified": p.modified, "title": p.title}
 
 	elif parent == "Report":
-		reports = frappe.get_all(
+		if not has_permission("Report", raise_exception=False):
+			return {}
+
+		reports = frappe.get_list(
 			"Report",
 			fields=["name", "report_type"],
 			filters={"name": ("in", has_role.keys())},
@@ -243,12 +245,18 @@ def get_user_pages_or_reports(parent, cache=False):
 		for report in reports:
 			has_role[report.name]["report_type"] = report.report_type
 
+		non_permitted_reports = set(has_role.keys()) - {r.name for r in reports}
+		for r in non_permitted_reports:
+			has_role.pop(r, None)
+
 	# Expire every six hours
 	_cache.set_value("has_role:" + parent, has_role, frappe.session.user, 21600)
 	return has_role
 
 
 def load_translations(bootinfo):
+	from frappe.translate import get_messages_for_boot
+
 	bootinfo["lang"] = frappe.lang
 	bootinfo["__messages"] = get_messages_for_boot()
 
@@ -394,9 +402,9 @@ def get_link_title_doctypes():
 
 def set_time_zone(bootinfo):
 	bootinfo.time_zone = {
-		"system": get_time_zone(),
+		"system": get_system_timezone(),
 		"user": bootinfo.get("user_info", {}).get(frappe.session.user, {}).get("time_zone", None)
-		or get_time_zone(),
+		or get_system_timezone(),
 	}
 
 
@@ -431,8 +439,8 @@ def load_currency_docs(bootinfo):
 	bootinfo.docs += currency_docs
 
 
-def add_subscription_expiry():
+def add_subscription_conf():
 	try:
-		return frappe.conf.subscription["expiry"]
+		return frappe.conf.subscription
 	except Exception:
 		return ""

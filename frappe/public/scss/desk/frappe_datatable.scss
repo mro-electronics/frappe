@@ -21,7 +21,8 @@
 	margin-top: 0px;
 	font-size: var(--text-md);
 
-	.frappe-control, .form-control {
+	.frappe-control,
+	.form-control {
 		margin: 0;
 		border-radius: 0px;
 		border: none;
@@ -36,10 +37,13 @@
 			top: 5px;
 			right: 10px;
 		}
+
+		.help {
+			display: none;
+		}
 	}
 
 	.dt-header {
-
 		.dt-row[data-is-filter] {
 			display: flex !important;
 		}
@@ -67,6 +71,10 @@
 
 	.checkbox {
 		margin: 7px 0 7px 8px;
+
+		.label-area {
+			display: none;
+		}
 	}
 
 	[data-fieldtype="Color"] .control-input {
@@ -128,7 +136,8 @@
 		font-feature-settings: "tnum";
 	}
 
-	.dt-cell__content--header-0, .dt-cell__content--col-0 {
+	.dt-cell__content--header-0,
+	.dt-cell__content--col-0 {
 		padding: 0.5rem;
 	}
 

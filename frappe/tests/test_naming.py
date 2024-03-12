@@ -1,6 +1,8 @@
 # Copyright (c) 2018, Frappe Technologies Pvt. Ltd. and Contributors
 # License: MIT. See LICENSE
 
+from unittest.mock import patch
+
 import frappe
 from frappe.core.doctype.doctype.test_doctype import new_doctype
 from frappe.model.naming import (
@@ -12,7 +14,7 @@ from frappe.model.naming import (
 	parse_naming_series,
 	revert_series_if_last,
 )
-from frappe.tests.utils import FrappeTestCase
+from frappe.tests.utils import FrappeTestCase, patch_hooks
 from frappe.utils import now_datetime, nowdate, nowtime
 
 
@@ -43,7 +45,6 @@ class TestNaming(FrappeTestCase):
 		self.assertEqual(title2, "Test_1")
 
 	def test_field_autoname_name_sync(self):
-
 		country = frappe.get_last_doc("Country")
 		original_name = country.name
 		country.country_name = "Not a country"
@@ -321,7 +322,7 @@ class TestNaming(FrappeTestCase):
 	def test_naming_series_validation(self):
 		dns = frappe.get_doc("Document Naming Settings")
 		exisiting_series = dns.get_transactions_and_prefixes()["prefixes"]
-		valid = ["SINV-", "SI-.{field}.", "SI-#.###", ""] + exisiting_series
+		valid = ["SINV-", "SI-.{field}.", "SI-#.###", "", *exisiting_series]
 		invalid = ["$INV-", r"WINDOWS\NAMING"]
 
 		for series in valid:
@@ -335,7 +336,6 @@ class TestNaming(FrappeTestCase):
 			self.assertRaises(InvalidNamingSeriesError, NamingSeries(series).validate)
 
 	def test_naming_using_fields(self):
-
 		webhook = frappe.new_doc("Webhook")
 		webhook.webhook_docevent = "on_update"
 		name = NamingSeries("KOOH-.{webhook_docevent}.").generate_next_name(webhook)
@@ -365,9 +365,38 @@ class TestNaming(FrappeTestCase):
 		series = "KOOH-..{webhook_docevent}.-.####"
 
 		name = parse_naming_series(series, doc=webhook)
-		self.assertTrue(
-			name.startswith("KOOH-"), f"incorrect name generated {name}, missing field value"
-		)
+		self.assertTrue(name.startswith("KOOH-"), f"incorrect name generated {name}, missing field value")
+
+	def test_naming_with_empty_field(self):
+		# check naming with empty field value
+
+		webhook = frappe.new_doc("Webhook")
+		series = "KOOH-.{request_structure}.-.request_structure.-.####"
+
+		name = parse_naming_series(series, doc=webhook)
+		self.assertTrue(name.startswith("KOOH---"), f"incorrect name generated {name}")
+
+	def test_custom_parser(self):
+		# check naming with custom parser
+		todo = frappe.new_doc("ToDo")
+		series = "TODO-.PM.-.####"
+
+		frappe.clear_cache()
+		with patch_hooks(
+			{
+				"naming_series_variables": {
+					"PM": ["frappe.tests.test_naming.parse_naming_series_variable"],
+				},
+			},
+		):
+			name = parse_naming_series(series, doc=todo)
+			expected_name = "TODO-" + nowdate().split("-")[1] + "-" + "0001"
+			self.assertEqual(name, expected_name)
+
+
+def parse_naming_series_variable(doc, variable):
+	if variable == "PM":
+		return nowdate().split("-")[1]
 
 
 def make_invalid_todo():
