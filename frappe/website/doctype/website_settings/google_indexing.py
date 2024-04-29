@@ -16,9 +16,7 @@ def authorize_access(reauthorize=False, code=None):
 	"""If no Authorization code get it from Google and then request for Refresh Token."""
 
 	oauth_code = (
-		frappe.db.get_single_value("Website Settings", "indexing_authorization_code")
-		if not code
-		else code
+		frappe.db.get_single_value("Website Settings", "indexing_authorization_code") if not code else code
 	)
 
 	oauth_obj = GoogleOAuth("indexing")
@@ -31,8 +29,7 @@ def authorize_access(reauthorize=False, code=None):
 		)
 
 	res = oauth_obj.authorize(oauth_code)
-	frappe.db.set_value(
-		"Website Settings",
+	frappe.db.set_single_value(
 		"Website Settings",
 		{"indexing_authorization_code": oauth_code, "indexing_refresh_token": res.get("refresh_token")},
 	)

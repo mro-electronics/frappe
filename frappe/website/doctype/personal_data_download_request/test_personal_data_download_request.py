@@ -44,9 +44,7 @@ class TestRequestPersonalData(FrappeTestCase):
 
 		self.assertEqual(file_count, 1)
 
-		email_queue = frappe.get_all(
-			"Email Queue", fields=["message"], order_by="creation DESC", limit=1
-		)
+		email_queue = frappe.get_all("Email Queue", fields=["message"], order_by="creation DESC", limit=1)
 		self.assertIn(frappe._("Download Your Data"), email_queue[0].message)
 
 		frappe.db.delete("Email Queue")
@@ -61,7 +59,7 @@ def create_user_if_not_exists(email, first_name=None):
 			"user_type": "Website User",
 			"email": email,
 			"send_welcome_email": 0,
-			"first_name": first_name or email.split("@")[0],
+			"first_name": first_name or email.split("@", 1)[0],
 			"birth_date": frappe.utils.now_datetime(),
 		}
 	).insert(ignore_permissions=True)

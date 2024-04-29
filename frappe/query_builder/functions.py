@@ -18,7 +18,19 @@ class Concat_ws(Function):
 
 class Locate(Function):
 	def __init__(self, *terms, **kwargs):
+		terms = list(terms)
+		if not isinstance(terms[0], str):
+			terms[0] = terms[0].get_sql()
 		super().__init__("LOCATE", *terms, **kwargs)
+
+
+class Ifnull(IfNull):
+	def __init__(self, condition, term, **kwargs):
+		if not isinstance(condition, str):
+			condition = condition.get_sql()
+		if not isinstance(term, str):
+			term = term.get_sql()
+		super().__init__(condition, term, **kwargs)
 
 
 class Timestamp(Function):
@@ -27,6 +39,16 @@ class Timestamp(Function):
 			super().__init__("TIMESTAMP", term, time, alias=alias)
 		else:
 			super().__init__("TIMESTAMP", term, alias=alias)
+
+
+class Round(Function):
+	def __init__(self, term, decimal=0, **kwargs):
+		super().__init__("ROUND", term, decimal, **kwargs)
+
+
+class Truncate(Function):
+	def __init__(self, term, decimal, **kwargs):
+		super().__init__("TRUNCATE", term, decimal, **kwargs)
 
 
 GroupConcat = ImportMapper({db_type_is.MARIADB: GROUP_CONCAT, db_type_is.POSTGRES: STRING_AGG})
@@ -62,6 +84,22 @@ DateFormat = ImportMapper(
 )
 
 
+class _PostgresUnixTimestamp(Extract):
+	# Note: this is just a special case of "Extract" function with "epoch" hardcoded.
+	# Check super definition to see how it works.
+	def __init__(self, field, alias=None):
+		super().__init__("epoch", field=field, alias=alias)
+		self.field = field
+
+
+UnixTimestamp = ImportMapper(
+	{
+		db_type_is.MARIADB: CustomFunction("unix_timestamp", ["date"]),
+		db_type_is.POSTGRES: _PostgresUnixTimestamp,
+	}
+)
+
+
 class Cast_(Function):
 	def __init__(self, value, as_type, alias=None):
 		if frappe.db.db_type == "mariadb" and (
@@ -91,9 +129,9 @@ class Cast_(Function):
 
 def _aggregate(function, dt, fieldname, filters, **kwargs):
 	return (
-		frappe.qb.engine.build_conditions(dt, filters)
-		.select(function(PseudoColumn(fieldname)))
-		.run(**kwargs)[0][0]
+		frappe.qb.get_query(dt, filters=filters, fields=[function(PseudoColumn(fieldname))]).run(**kwargs)[0][
+			0
+		]
 		or 0
 	)
 
@@ -109,6 +147,7 @@ class SqlFunctions(Enum):
 	Min = "min"
 	Abs = "abs"
 	Timestamp = "timestamp"
+	IfNull = "ifnull"
 
 
 def _max(dt, fieldname, filters=None, **kwargs):

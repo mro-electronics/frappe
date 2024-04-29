@@ -32,6 +32,12 @@ jobs:
           - 3306:3306
         options: --health-cmd="mysqladmin ping" --health-interval=5s --health-timeout=2s --health-retries=3
 
+      smtp_server:
+        image: rnwood/smtp4dev
+        ports:
+          - 2525:25
+          - 3000:80
+
     steps:
       - name: Clone
         uses: actions/checkout@v3
@@ -57,6 +63,7 @@ jobs:
           TYPE: "server"
           PR_NUMBER: ${{ github.event.number }}
           REPO_NAME: ${{ github.repository }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - uses: actions/setup-node@v3
         if: ${{ steps.check-build.outputs.build == 'strawberry' }}

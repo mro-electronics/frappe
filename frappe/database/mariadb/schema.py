@@ -1,3 +1,5 @@
+from pymysql.constants.ER import DUP_ENTRY
+
 import frappe
 from frappe import _
 from frappe.database.schema import DBTable
@@ -36,10 +38,7 @@ class MariaDBTable(DBTable):
 			)
 
 		# creating sequence(s)
-		if (
-			not self.meta.issingle and self.meta.autoname == "autoincrement"
-		) or self.doctype in log_types:
-
+		if (not self.meta.issingle and self.meta.autoname == "autoincrement") or self.doctype in log_types:
 			frappe.db.create_sequence(self.doctype, check_not_exists=True, cache=frappe.db.SEQUENCE_CACHE)
 
 			# NOTE: not used nextval func as default as the ability to restore
@@ -63,7 +62,7 @@ class MariaDBTable(DBTable):
 			CHARACTER SET=utf8mb4
 			COLLATE=utf8mb4_unicode_ci"""
 
-		frappe.db.sql(query)
+		frappe.db.sql_ddl(query)
 
 	def alter(self):
 		for col in self.columns.values():
@@ -74,20 +73,24 @@ class MariaDBTable(DBTable):
 		add_index_query = []
 		drop_index_query = []
 
-		columns_to_modify = set(self.change_type + self.add_unique + self.set_default)
-
 		for col in self.add_column:
 			add_column_query.append(f"ADD COLUMN `{col.fieldname}` {col.get_definition()}")
 
+		columns_to_modify = set(self.change_type + self.set_default)
 		for col in columns_to_modify:
-			modify_column_query.append(f"MODIFY `{col.fieldname}` {col.get_definition()}")
+			modify_column_query.append(
+				f"MODIFY `{col.fieldname}` {col.get_definition(for_modification=True)}"
+			)
+
+		for col in self.add_unique:
+			modify_column_query.append(f"ADD UNIQUE INDEX IF NOT EXISTS {col.fieldname} (`{col.fieldname}`)")
 
 		for col in self.add_index:
 			# if index key does not exists
 			if not frappe.db.get_column_index(self.table_name, col.fieldname, unique=False):
 				add_index_query.append(f"ADD INDEX `{col.fieldname}_index`(`{col.fieldname}`)")
 
-		for col in self.drop_index + self.drop_unique:
+		for col in {*self.drop_index, *self.drop_unique}:
 			if col.fieldname == "name":
 				continue
 
@@ -107,20 +110,18 @@ class MariaDBTable(DBTable):
 				if query_parts:
 					query_body = ", ".join(query_parts)
 					query = f"ALTER TABLE `{self.table_name}` {query_body}"
-					frappe.db.sql(query)
+					frappe.db.sql_ddl(query)
 
 		except Exception as e:
-			# sanitize
-			if e.args[0] == 1060:
-				frappe.throw(str(e))
-			elif e.args[0] == 1062:
+			if query := locals().get("query"):  # this weirdness is to avoid potentially unbounded vars
+				print(f"Failed to alter schema using query: {query}")
+
+			if e.args[0] == DUP_ENTRY:
 				fieldname = str(e).split("'")[-2]
 				frappe.throw(
-					_("{0} field cannot be set as unique in {1}, as there are non-unique existing values").format(
-						fieldname, self.table_name
-					)
+					_(
+						"{0} field cannot be set as unique in {1}, as there are non-unique existing values"
+					).format(fieldname, self.table_name)
 				)
-			elif e.args[0] == 1067:
-				frappe.throw(str(e.args[1]))
-			else:
-				raise e
+
+			raise

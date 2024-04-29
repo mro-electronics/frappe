@@ -3,9 +3,13 @@
 
 import email
 import re
+from unittest.mock import patch
+
+import requests
 
 import frappe
 from frappe.email.doctype.email_account.test_email_account import TestEmailAccount
+from frappe.email.doctype.email_queue.email_queue import QueueBuilder
 from frappe.tests.utils import FrappeTestCase
 
 test_dependencies = ["Email Account"]
@@ -50,20 +54,16 @@ class TestEmail(FrappeTestCase):
 		self.test_email_queue(send_after=1)
 		from frappe.email.queue import flush
 
-		flush(from_test=True)
-		email_queue = frappe.db.sql(
-			"""select name from `tabEmail Queue` where status='Sent'""", as_dict=1
-		)
+		flush()
+		email_queue = frappe.db.sql("""select name from `tabEmail Queue` where status='Sent'""", as_dict=1)
 		self.assertEqual(len(email_queue), 0)
 
 	def test_flush(self):
 		self.test_email_queue()
 		from frappe.email.queue import flush
 
-		flush(from_test=True)
-		email_queue = frappe.db.sql(
-			"""select name from `tabEmail Queue` where status='Sent'""", as_dict=1
-		)
+		flush()
+		email_queue = frappe.db.sql("""select name from `tabEmail Queue` where status='Sent'""", as_dict=1)
 		self.assertEqual(len(email_queue), 1)
 		queue_recipients = [
 			r.recipient
@@ -129,9 +129,7 @@ class TestEmail(FrappeTestCase):
 			expose_recipients="footer",
 			now=True,
 		)
-		email_queue = frappe.db.sql(
-			"""select name from `tabEmail Queue` where status='Sent'""", as_dict=1
-		)
+		email_queue = frappe.db.sql("""select name from `tabEmail Queue` where status='Sent'""", as_dict=1)
 		self.assertEqual(len(email_queue), 1)
 		queue_recipients = [
 			r.recipient
@@ -154,7 +152,6 @@ class TestEmail(FrappeTestCase):
 		frappe.conf.use_ssl = False
 
 	def test_expose(self):
-
 		from frappe.utils.verified_command import verify_request
 
 		frappe.sendmail(
@@ -168,9 +165,7 @@ class TestEmail(FrappeTestCase):
 			unsubscribe_message="Unsubscribe",
 			now=True,
 		)
-		email_queue = frappe.db.sql(
-			"""select name from `tabEmail Queue` where status='Sent'""", as_dict=1
-		)
+		email_queue = frappe.db.sql("""select name from `tabEmail Queue` where status='Sent'""", as_dict=1)
 		self.assertEqual(len(email_queue), 1)
 		queue_recipients = [
 			r.recipient
@@ -211,9 +206,7 @@ class TestEmail(FrappeTestCase):
 
 		set_expiry_for_email_queue()
 
-		email_queue = frappe.db.sql(
-			"""select name from `tabEmail Queue` where status='Expired'""", as_dict=1
-		)
+		email_queue = frappe.db.sql("""select name from `tabEmail Queue` where status='Expired'""", as_dict=1)
 		self.assertEqual(len(email_queue), 1)
 		queue_recipients = [
 			r.recipient
@@ -228,22 +221,46 @@ class TestEmail(FrappeTestCase):
 		self.assertTrue("test1@example.com" in queue_recipients)
 		self.assertEqual(len(queue_recipients), 2)
 
+	def test_sender(self):
+		def _patched_assertion(email_account, assertion):
+			with patch.object(QueueBuilder, "get_outgoing_email_account", return_value=email_account):
+				frappe.sendmail(
+					recipients=["test1@example.com"],
+					sender="admin@example.com",
+					subject="Test Email Queue",
+					message="This mail is queued!",
+					now=True,
+				)
+				email_queue_sender = frappe.db.get_value("Email Queue", {"status": "Sent"}, "sender")
+				self.assertEqual(email_queue_sender, assertion)
+
+		email_account = frappe.get_doc("Email Account", "_Test Email Account 1")
+		email_account.default_outgoing = 1
+
+		email_account.always_use_account_name_as_sender_name = 0
+		email_account.always_use_account_email_id_as_sender = 0
+		_patched_assertion(email_account, "admin@example.com")
+
+		email_account.always_use_account_name_as_sender_name = 1
+		_patched_assertion(email_account, "_Test Email Account 1 <admin@example.com>")
+
+		email_account.always_use_account_name_as_sender_name = 0
+		email_account.always_use_account_email_id_as_sender = 1
+		_patched_assertion(email_account, '"admin@example.com" <test@example.com>')
+
+		email_account.always_use_account_name_as_sender_name = 1
+		_patched_assertion(email_account, "_Test Email Account 1 <test@example.com>")
+
 	def test_unsubscribe(self):
-		from frappe.email.doctype.email_queue.email_queue import QueueBuilder
 		from frappe.email.queue import unsubscribe
 
 		unsubscribe(doctype="User", name="Administrator", email="test@example.com")
-
 		self.assertTrue(
 			frappe.db.get_value(
 				"Email Unsubscribe",
 				{"reference_doctype": "User", "reference_name": "Administrator", "email": "test@example.com"},
 			)
 		)
-
-		before = frappe.db.sql("""select count(name) from `tabEmail Queue` where status='Not Sent'""")[
-			0
-		][0]
 
 		builder = QueueBuilder(
 			recipients=["test@example.com", "test1@example.com"],
@@ -254,13 +271,11 @@ class TestEmail(FrappeTestCase):
 			message="This is mail is queued!",
 			unsubscribe_message="Unsubscribe",
 		)
-		builder.process()
-		# this is sent async (?)
 
-		email_queue = frappe.db.sql(
-			"""select name from `tabEmail Queue` where status='Not Sent'""", as_dict=1
-		)
-		self.assertEqual(len(email_queue), before + 1)
+		# don't send right now
+		builder.process()
+
+		email_queue = frappe.db.get_value("Email Queue", {"status": "Not Sent"})
 		queue_recipients = [
 			r.recipient
 			for r in frappe.db.sql(
@@ -272,6 +287,8 @@ class TestEmail(FrappeTestCase):
 		self.assertFalse("test@example.com" in queue_recipients)
 		self.assertTrue("test1@example.com" in queue_recipients)
 		self.assertEqual(len(queue_recipients), 1)
+
+		frappe.get_doc("Email Queue", email_queue).send()
 		self.assertTrue("Unsubscribe" in frappe.safe_decode(frappe.flags.sent_mail))
 
 	def test_image_parsing(self):
@@ -324,8 +341,48 @@ class TestVerifiedRequests(FrappeTestCase):
 		frappe.local.request = None
 
 
-if __name__ == "__main__":
-	import unittest
+class TestEmailIntegrationTest(FrappeTestCase):
+	"""Sends email to local SMTP server and verifies correctness.
 
-	frappe.connect()
-	unittest.main()
+	SMTP4Dev runs as a service in unit test CI job.
+	If you need to run this test locally, you must setup SMTP4dev locally.
+
+	WARNING: SMTP4dev doesn't have stable API, it can break anytime.
+	"""
+
+	SMTP4DEV_WEB = "http://localhost:3000"
+
+	def setUp(self) -> None:
+		# Frappe code is configured to not attempting sending emails during test.
+		frappe.flags.testing_email = True
+		requests.delete(f"{self.SMTP4DEV_WEB}/api/Messages/*")
+		return super().setUp()
+
+	def tearDown(self) -> None:
+		frappe.flags.testing_email = False
+		return super().tearDown()
+
+	def get_last_sent_emails(self):
+		return requests.get(
+			f"{self.SMTP4DEV_WEB}/api/Messages?sortColumn=receivedDate&sortIsDescending=true"
+		).json()
+
+	def test_send_email(self):
+		sender = "a@example.io"
+		recipients = "b@example.io,c@example.io"
+		subject = "checking if email works"
+		content = "is email working?"
+
+		frappe.sendmail(sender=sender, recipients=recipients, subject=subject, content=content, now=True)
+		email = frappe.get_last_doc("Email Queue")
+		self.assertEqual(email.sender, sender)
+		self.assertEqual(len(email.recipients), 2)
+		self.assertEqual(email.status, "Sent")
+
+		sent_mails = self.get_last_sent_emails()
+		self.assertEqual(len(sent_mails), 2)
+
+		for sent_mail in sent_mails:
+			self.assertEqual(sent_mail["from"], sender)
+			self.assertEqual(sent_mail["subject"], subject)
+		self.assertSetEqual(set(recipients.split(",")), {m["to"] for m in sent_mails})

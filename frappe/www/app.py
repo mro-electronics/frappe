@@ -18,17 +18,14 @@ CLOSING_SCRIPT_TAG_PATTERN = re.compile(r"</script\>")
 def get_context(context):
 	if frappe.session.user == "Guest":
 		frappe.throw(_("Log in to access this page."), frappe.PermissionError)
-	elif (
-		frappe.db.get_value("User", frappe.session.user, "user_type", order_by=None) == "Website User"
-	):
+	elif frappe.db.get_value("User", frappe.session.user, "user_type", order_by=None) == "Website User":
 		frappe.throw(_("You are not permitted to access this page."), frappe.PermissionError)
 
 	hooks = frappe.get_hooks()
 	try:
 		boot = frappe.sessions.get()
 	except Exception as e:
-		boot = frappe._dict(status="failed", error=str(e))
-		print(frappe.get_traceback())
+		raise frappe.SessionBootFailed from e
 
 	# this needs commit
 	csrf_token = frappe.sessions.get_csrf_token()
@@ -44,12 +41,15 @@ def get_context(context):
 	boot_json = CLOSING_SCRIPT_TAG_PATTERN.sub("", boot_json)
 	boot_json = json.dumps(boot_json)
 
+	include_js = hooks.get("app_include_js", []) + frappe.conf.get("app_include_js", [])
+	include_css = hooks.get("app_include_css", []) + frappe.conf.get("app_include_css", [])
+
 	context.update(
 		{
 			"no_cache": 1,
 			"build_version": frappe.utils.get_build_version(),
-			"include_js": hooks["app_include_js"],
-			"include_css": hooks["app_include_css"],
+			"include_js": include_js,
+			"include_css": include_css,
 			"layout_direction": "rtl" if is_rtl() else "ltr",
 			"lang": frappe.local.lang,
 			"sounds": hooks["sounds"],

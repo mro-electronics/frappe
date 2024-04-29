@@ -33,9 +33,7 @@ def get_permission_query_conditions(user):
 	if user == "Administrator":
 		return ""
 
-	return """(`tabKanban Board`.private=0 or `tabKanban Board`.owner={user})""".format(
-		user=frappe.db.escape(user)
-	)
+	return f"""(`tabKanban Board`.private=0 or `tabKanban Board`.owner={frappe.db.escape(user)})"""
 
 
 def has_permission(doc, ptype, user):
@@ -88,10 +86,15 @@ def update_order(board_name, order):
 	"""Save the order of cards in columns"""
 	board = frappe.get_doc("Kanban Board", board_name)
 	doctype = board.reference_doctype
+	updated_cards = []
+
+	if not frappe.has_permission(doctype, "write"):
+		# Return board data from db
+		return board, updated_cards
+
 	fieldname = board.field_name
 	order_dict = json.loads(order)
 
-	updated_cards = []
 	for col_name, cards in order_dict.items():
 		for card in cards:
 			column = frappe.get_value(doctype, {"name": card}, fieldname)
@@ -103,17 +106,17 @@ def update_order(board_name, order):
 			if column.column_name == col_name:
 				column.order = json.dumps(cards)
 
-	board.save()
-	return board, updated_cards
+	return board.save(ignore_permissions=True), updated_cards
 
 
 @frappe.whitelist()
-def update_order_for_single_card(
-	board_name, docname, from_colname, to_colname, old_index, new_index
-):
+def update_order_for_single_card(board_name, docname, from_colname, to_colname, old_index, new_index):
 	"""Save the order of cards in columns"""
 	board = frappe.get_doc("Kanban Board", board_name)
 	doctype = board.reference_doctype
+
+	frappe.has_permission(doctype, "write", throw=True)
+
 	fieldname = board.field_name
 	old_index = frappe.parse_json(old_index)
 	new_index = frappe.parse_json(new_index)
@@ -130,7 +133,7 @@ def update_order_for_single_card(
 	# save updated order
 	board.columns[from_col_idx].order = frappe.as_json(from_col_order)
 	board.columns[to_col_idx].order = frappe.as_json(to_col_order)
-	board.save()
+	board.save(ignore_permissions=True)
 
 	# update changed value in doc
 	frappe.set_value(doctype, docname, fieldname, to_colname)
@@ -151,13 +154,14 @@ def get_kanban_column_order_and_index(board, colname):
 def add_card(board_name, docname, colname):
 	board = frappe.get_doc("Kanban Board", board_name)
 
+	frappe.has_permission(board.reference_doctype, "write", throw=True)
+
 	col_order, col_idx = get_kanban_column_order_and_index(board, colname)
 	col_order.insert(0, docname)
 
 	board.columns[col_idx].order = frappe.as_json(col_order)
 
-	board.save()
-	return board
+	return board.save(ignore_permissions=True)
 
 
 @frappe.whitelist()
@@ -212,7 +216,7 @@ def update_column_order(board_name, order):
 	new_columns = []
 
 	for col in order:
-		for column in old_columns:
+		for column in list(old_columns):
 			if col == column.column_name:
 				new_columns.append(column)
 				old_columns.remove(column)

@@ -239,9 +239,7 @@ def create_web_page(title, route, single_thread):
 	web_page = frappe.db.exists("Web Page", {"route": route})
 	if web_page:
 		return web_page
-	web_page = frappe.get_doc(
-		{"doctype": "Web Page", "title": title, "route": route, "published": True}
-	)
+	web_page = frappe.get_doc({"doctype": "Web Page", "title": title, "route": route, "published": True})
 	web_page.save()
 
 	web_page.append(
@@ -398,7 +396,6 @@ def insert_translations():
 
 @whitelist_for_tests
 def create_blog_post():
-
 	blog_category = frappe.get_doc(
 		{"name": "general", "doctype": "Blog Category", "title": "general"}
 	).insert(ignore_if_duplicate=True)
@@ -426,12 +423,15 @@ def create_blog_post():
 	return doc
 
 
-def create_test_user():
-	if frappe.db.exists("User", UI_TEST_USER):
+@whitelist_for_tests
+def create_test_user(username=None):
+	name = username or UI_TEST_USER
+
+	if frappe.db.exists("User", name):
 		return
 
 	user = frappe.new_doc("User")
-	user.email = UI_TEST_USER
+	user.email = name
 	user.first_name = "Frappe"
 	user.new_password = frappe.local.conf.admin_password
 	user.send_welcome_email = 0
@@ -495,7 +495,7 @@ def setup_image_doctype():
 
 @whitelist_for_tests
 def setup_inbox():
-	frappe.db.sql("DELETE FROM `tabUser Email`")
+	frappe.db.delete("User Email")
 
 	user = frappe.get_doc("User", frappe.session.user)
 	user.append("user_emails", {"email_account": "Email Linking"})
@@ -564,6 +564,49 @@ def create_kanban():
 				"reference_doctype": "Note",
 				"field_name": "kanban",
 				"private": 1,
+				"show_labels": 0,
+				"columns": [
+					{
+						"column_name": "Open",
+						"status": "Active",
+						"indicator": "Gray",
+					},
+					{
+						"column_name": "Closed",
+						"status": "Active",
+						"indicator": "Gray",
+					},
+				],
+			}
+		).insert()
+
+
+@whitelist_for_tests
+def create_todo(description):
+	frappe.get_doc({"doctype": "ToDo", "description": description}).insert()
+
+
+@whitelist_for_tests
+def create_todo_with_attachment_limit(description):
+	from frappe.custom.doctype.property_setter.property_setter import make_property_setter
+
+	make_property_setter("ToDo", None, "max_attachments", 12, "int", for_doctype=True)
+
+	return frappe.get_doc({"doctype": "ToDo", "description": description}).insert()
+
+
+@whitelist_for_tests
+def create_admin_kanban():
+	if not frappe.db.exists("Kanban Board", "Admin Kanban"):
+		frappe.get_doc(
+			{
+				"doctype": "Kanban Board",
+				"name": "Admin Kanban",
+				"owner": "Administrator",
+				"kanban_board_name": "Admin Kanban",
+				"reference_doctype": "ToDo",
+				"field_name": "status",
+				"private": 0,
 				"show_labels": 0,
 				"columns": [
 					{

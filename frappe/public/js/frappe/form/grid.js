@@ -63,6 +63,7 @@ export default class Grid {
 		let template = `
 			<div class="grid-field">
 				<label class="control-label">${__(this.df.label || "")}</label>
+				<span class="help"></span>
 				<p class="text-muted small grid-description"></p>
 				<div class="grid-custom-buttons"></div>
 				<div class="form-grid-container">
@@ -118,6 +119,7 @@ export default class Grid {
 		this.wrapper = $(template).appendTo(this.parent);
 		$(this.parent).addClass("form-group");
 		this.set_grid_description();
+		this.set_doc_url();
 
 		frappe.utils.bind_actions_with_object(this.wrapper, this);
 
@@ -147,6 +149,26 @@ export default class Grid {
 			description_wrapper.hide();
 		}
 	}
+
+	set_doc_url() {
+		let unsupported_fieldtypes = frappe.model.no_value_type.filter(
+			(x) => frappe.model.table_fields.indexOf(x) === -1
+		);
+
+		if (
+			!this.df.label ||
+			!this.df?.documentation_url ||
+			in_list(unsupported_fieldtypes, this.df.fieldtype)
+		)
+			return;
+
+		let $help = $(this.parent).find("span.help");
+		$help.empty();
+		$(`<a href="${this.df.documentation_url}" target="_blank">
+			${frappe.utils.icon("help", "sm")}
+		</a>`).appendTo($help);
+	}
+
 	setup_grid_pagination() {
 		this.grid_pagination = new GridPagination({
 			grid: this,
@@ -385,7 +407,7 @@ export default class Grid {
 		this.toggle_checkboxes(this.display_status !== "Read");
 
 		// sortable
-		if (this.frm && this.is_sortable() && !this.sortable_setup_done) {
+		if (this.is_sortable() && !this.sortable_setup_done) {
 			this.make_sortable($rows);
 			this.sortable_setup_done = true;
 		}
@@ -455,11 +477,16 @@ export default class Grid {
 					this.wrapper.find(".grid-add-multiple-rows").removeClass("hidden");
 				}
 			}
-		} else if (this.grid_rows.length < this.grid_pagination.page_length) {
+		} else if (
+			this.grid_rows.length < this.grid_pagination.page_length &&
+			!this.df.allow_bulk_edit
+		) {
 			this.wrapper.find(".grid-footer").toggle(false);
 		}
 
-		this.wrapper.find(".grid-add-row, .grid-add-multiple-rows").toggle(this.is_editable());
+		this.wrapper
+			.find(".grid-add-row, .grid-add-multiple-rows, .grid-upload")
+			.toggle(this.is_editable());
 	}
 
 	truncate_rows() {
@@ -531,17 +558,18 @@ export default class Grid {
 				let idx = $(event.item).closest(".grid-row").attr("data-idx") - 1;
 				let doc = this.data[idx % this.grid_pagination.page_length];
 				this.renumber_based_on_dom();
-				this.frm.script_manager.trigger(
-					this.df.fieldname + "_move",
-					this.df.options,
-					doc.name
-				);
+				this.frm &&
+					this.frm.script_manager.trigger(
+						this.df.fieldname + "_move",
+						this.df.options,
+						doc.name
+					);
 				this.refresh();
-				this.frm.dirty();
+				this.frm && this.frm.dirty();
 			},
 		});
 
-		$(this.frm.wrapper).trigger("grid-make-sortable", [this.frm]);
+		this.frm && $(this.frm.wrapper).trigger("grid-make-sortable", [this.frm]);
 	}
 
 	get_data(filter_field) {
@@ -557,9 +585,9 @@ export default class Grid {
 	}
 
 	get_filtered_data() {
-		if (!this.frm) return;
+		let all_data = this.frm ? this.frm.doc[this.df.fieldname] : this.df.data;
 
-		let all_data = this.frm.doc[this.df.fieldname];
+		if (!all_data) return;
 
 		for (const field in this.filter) {
 			all_data = all_data.filter((data) => {
@@ -769,7 +797,11 @@ export default class Grid {
 				if (!this.df.data) {
 					this.df.data = this.get_data() || [];
 				}
-				this.df.data.push({ idx: this.df.data.length + 1, __islocal: true });
+				const defaults = this.docfields.reduce((acc, d) => {
+					acc[d.fieldname] = d.default;
+					return acc;
+				}, {});
+				this.df.data.push({ idx: this.df.data.length + 1, __islocal: true, ...defaults });
 				this.refresh();
 			}
 
@@ -803,11 +835,11 @@ export default class Grid {
 			let $item = $(item);
 			let index =
 				(this.grid_pagination.page_index - 1) * this.grid_pagination.page_length + i;
-			let d = locals[this.doctype][$item.attr("data-name")];
+			let d = this.grid_rows_by_docname[$item.attr("data-name")].doc;
 			d.idx = index + 1;
 			$item.attr("data-idx", d.idx);
 
-			this.frm.doc[this.df.fieldname][index] = d;
+			if (this.frm) this.frm.doc[this.df.fieldname][index] = d;
 			this.data[index] = d;
 			this.grid_rows[index] = this.grid_rows_by_docname[d.name];
 		});
@@ -947,15 +979,17 @@ export default class Grid {
 
 		let user_settings = frappe.get_user_settings(this.frm.doctype, "GridView");
 		if (user_settings && user_settings[this.doctype] && user_settings[this.doctype].length) {
-			this.user_defined_columns = user_settings[this.doctype].map((row) => {
-				let column = frappe.meta.get_docfield(this.doctype, row.fieldname);
+			this.user_defined_columns = user_settings[this.doctype]
+				.map((row) => {
+					let column = frappe.meta.get_docfield(this.doctype, row.fieldname);
 
-				if (column) {
-					column.in_list_view = 1;
-					column.columns = row.columns;
-					return column;
-				}
-			});
+					if (column) {
+						column.in_list_view = 1;
+						column.columns = row.columns;
+						return column;
+					}
+				})
+				.filter(Boolean);
 		}
 	}
 
@@ -1022,6 +1056,9 @@ export default class Grid {
 					new frappe.ui.FileUploader({
 						as_dataurl: true,
 						allow_multiple: false,
+						restrictions: {
+							allowed_file_types: [".csv"],
+						},
 						on_success(file) {
 							var data = frappe.utils.csv_to_array(
 								frappe.utils.get_decoded_string(file.dataurl)
@@ -1159,6 +1196,13 @@ export default class Grid {
 
 		// update the parent too (for new rows)
 		this.docfields.find((d) => d.fieldname === fieldname)[property] = value;
+
+		if (this.user_defined_columns && this.user_defined_columns.length > 0) {
+			let field = this.user_defined_columns.find((d) => d.fieldname === fieldname);
+			if (field && Object.keys(field).includes(property)) {
+				field[property] = value;
+			}
+		}
 
 		this.debounced_refresh();
 	}

@@ -1,9 +1,13 @@
 # Copyright (c) 2021, Frappe Technologies Pvt. Ltd. and Contributors
 # License: MIT. See LICENSE
 
+import contextlib
+import glob
+import json
 import os
 import pathlib
 import re
+import textwrap
 
 import click
 import git
@@ -82,9 +86,7 @@ def _create_app_boilerplate(dest, hooks, no_git=False):
 		os.path.join(dest, hooks.app_name, hooks.app_name, frappe.scrub(hooks.app_title)),
 		with_init=True,
 	)
-	frappe.create_folder(
-		os.path.join(dest, hooks.app_name, hooks.app_name, "templates"), with_init=True
-	)
+	frappe.create_folder(os.path.join(dest, hooks.app_name, hooks.app_name, "templates"), with_init=True)
 	frappe.create_folder(os.path.join(dest, hooks.app_name, hooks.app_name, "www"))
 	frappe.create_folder(
 		os.path.join(dest, hooks.app_name, hooks.app_name, "templates", "pages"), with_init=True
@@ -102,18 +104,13 @@ def _create_app_boilerplate(dest, hooks, no_git=False):
 	with open(os.path.join(dest, hooks.app_name, hooks.app_name, "__init__.py"), "w") as f:
 		f.write(frappe.as_unicode(init_template))
 
-	with open(os.path.join(dest, hooks.app_name, "MANIFEST.in"), "w") as f:
-		f.write(frappe.as_unicode(manifest_template.format(**hooks)))
-
-	with open(os.path.join(dest, hooks.app_name, "requirements.txt"), "w") as f:
-		f.write("# frappe -- https://github.com/frappe/frappe is installed via 'bench init'")
+	with open(os.path.join(dest, hooks.app_name, "pyproject.toml"), "w") as f:
+		f.write(frappe.as_unicode(pyproject_template.format(**hooks)))
 
 	with open(os.path.join(dest, hooks.app_name, "README.md"), "w") as f:
 		f.write(
 			frappe.as_unicode(
-				"## {}\n\n{}\n\n#### License\n\n{}".format(
-					hooks.app_title, hooks.app_description, hooks.app_license
-				)
+				f"## {hooks.app_title}\n\n{hooks.app_description}\n\n#### License\n\n{hooks.app_license}"
 			)
 		)
 
@@ -127,9 +124,6 @@ def _create_app_boilerplate(dest, hooks, no_git=False):
 	# So escaping them before setting variables in setup.py and hooks.py
 	for key in ("app_publisher", "app_description", "app_license"):
 		hooks[key] = hooks[key].replace("\\", "\\\\").replace("'", "\\'").replace('"', '\\"')
-
-	with open(os.path.join(dest, hooks.app_name, "setup.py"), "w") as f:
-		f.write(frappe.as_unicode(setup_template.format(**hooks)))
 
 	with open(os.path.join(dest, hooks.app_name, hooks.app_name, "hooks.py"), "w") as f:
 		f.write(frappe.as_unicode(hooks_template.format(**hooks)))
@@ -168,33 +162,139 @@ def _create_github_workflow_files(dest, hooks):
 		f.write(github_workflow_template.format(**hooks))
 
 
-manifest_template = """include MANIFEST.in
-include requirements.txt
-include *.json
-include *.md
-include *.py
-include *.txt
-recursive-include {app_name} *.css
-recursive-include {app_name} *.csv
-recursive-include {app_name} *.html
-recursive-include {app_name} *.ico
-recursive-include {app_name} *.js
-recursive-include {app_name} *.json
-recursive-include {app_name} *.md
-recursive-include {app_name} *.png
-recursive-include {app_name} *.py
-recursive-include {app_name} *.svg
-recursive-include {app_name} *.txt
-recursive-exclude {app_name} *.pyc"""
+PATCH_TEMPLATE = textwrap.dedent(
+	'''
+	import frappe
 
-init_template = """
-__version__ = '0.0.1'
+	def execute():
+		"""{docstring}"""
 
+		# Write your patch here.
+		pass
+'''
+)
+
+
+class PatchCreator:
+	def __init__(self):
+		self.all_apps = frappe.get_all_apps(sites_path=".", with_internal_apps=False)
+
+		self.app = None
+		self.app_dir = None
+		self.patch_dir = None
+		self.filename = None
+		self.docstring = None
+		self.patch_file = None
+
+	def fetch_user_inputs(self):
+		self._ask_app_name()
+		self._ask_doctype_name()
+		self._ask_patch_meta_info()
+
+	def _ask_app_name(self):
+		self.app = click.prompt("Select app for new patch", type=click.Choice(self.all_apps))
+		self.app_dir = pathlib.Path(frappe.get_app_path(self.app))
+
+	def _ask_doctype_name(self):
+		def _doctype_name(filename):
+			with contextlib.suppress(Exception):
+				with open(filename) as f:
+					return json.load(f).get("name")
+
+		doctype_files = list(glob.glob(f"{self.app_dir}/**/doctype/**/*.json"))
+		doctype_map = {_doctype_name(file): file for file in doctype_files}
+		doctype_map.pop(None, None)
+
+		doctype = click.prompt(
+			"Provide DocType name on which this patch will apply",
+			type=click.Choice(doctype_map.keys()),
+			show_choices=False,
+		)
+		self.patch_dir = pathlib.Path(doctype_map[doctype]).parents[0] / "patches"
+
+	def _ask_patch_meta_info(self):
+		self.docstring = click.prompt("Describe what this patch does", type=str)
+		default_filename = frappe.scrub(self.docstring) + ".py"
+
+		def _valid_filename(name):
+			if not name:
+				return
+
+			match name.partition("."):
+				case filename, ".", "py" if filename.isidentifier():
+					return True
+				case _:
+					click.echo(f"{name} is not a valid python file name")
+
+		while not _valid_filename(self.filename):
+			self.filename = click.prompt(
+				"Provide filename for this patch", type=str, default=default_filename
+			)
+
+	def create_patch_file(self):
+		self._create_parent_folder_if_not_exists()
+
+		self.patch_file = self.patch_dir / self.filename
+
+		if self.patch_file.exists():
+			raise Exception(f"Patch {self.patch_file} already exists")
+
+		*path, _filename = self.patch_file.relative_to(self.app_dir.parents[0]).parts
+		dotted_path = ".".join([*path, self.patch_file.stem])
+
+		patches_txt = self.app_dir / "patches.txt"
+		existing_patches = patches_txt.read_text()
+
+		if dotted_path in existing_patches:
+			raise Exception(f"Patch {dotted_path} is already present in patches.txt")
+
+		self.patch_file.write_text(PATCH_TEMPLATE.format(docstring=self.docstring))
+
+		with open(patches_txt, "a+") as f:
+			if not existing_patches.endswith("\n"):
+				f.write("\n")  # ensure EOF
+			f.write(dotted_path + "\n")
+		click.echo(f"Created {self.patch_file} and updated patches.txt")
+
+	def _create_parent_folder_if_not_exists(self):
+		if not self.patch_dir.exists():
+			click.confirm(
+				f"Patch folder '{self.patch_dir}' doesn't exist, create it?",
+				abort=True,
+				default=True,
+			)
+			self.patch_dir.mkdir()
+
+		init_py = self.patch_dir / "__init__.py"
+		init_py.touch()
+
+
+init_template = """__version__ = "0.0.1"
 """
 
-hooks_template = """from . import __version__ as app_version
+pyproject_template = """[project]
+name = "{app_name}"
+authors = [
+    {{ name = "{app_publisher}", email = "{app_email}"}}
+]
+description = "{app_description}"
+requires-python = ">=3.10"
+readme = "README.md"
+dynamic = ["version"]
+dependencies = [
+    # "frappe~=15.0.0" # Installed and managed by bench.
+]
 
-app_name = "{app_name}"
+[build-system]
+requires = ["flit_core >=3.4,<4"]
+build-backend = "flit_core.buildapi"
+
+# These dependencies are only installed when developer mode is enabled
+[tool.bench.dev-dependencies]
+# package_name = "~=1.1.0"
+"""
+
+hooks_template = """app_name = "{app_name}"
 app_title = "{app_title}"
 app_publisher = "{app_publisher}"
 app_description = "{app_description}"
@@ -236,7 +336,7 @@ app_license = "{app_license}"
 
 # website user home page (by Role)
 # role_home_page = {{
-#	"Role": "home_page"
+# 	"Role": "home_page"
 # }}
 
 # Generators
@@ -250,8 +350,8 @@ app_license = "{app_license}"
 
 # add methods and filters to jinja environment
 # jinja = {{
-#	"methods": "{app_name}.utils.jinja_methods",
-#	"filters": "{app_name}.utils.jinja_filters"
+# 	"methods": "{app_name}.utils.jinja_methods",
+# 	"filters": "{app_name}.utils.jinja_filters"
 # }}
 
 # Installation
@@ -266,6 +366,22 @@ app_license = "{app_license}"
 # before_uninstall = "{app_name}.uninstall.before_uninstall"
 # after_uninstall = "{app_name}.uninstall.after_uninstall"
 
+# Integration Setup
+# ------------------
+# To set up dependencies/integrations with other apps
+# Name of the app being installed is passed as an argument
+
+# before_app_install = "{app_name}.utils.before_app_install"
+# after_app_install = "{app_name}.utils.after_app_install"
+
+# Integration Cleanup
+# -------------------
+# To clean up dependencies/integrations with other apps
+# Name of the app being uninstalled is passed as an argument
+
+# before_app_uninstall = "{app_name}.utils.before_app_uninstall"
+# after_app_uninstall = "{app_name}.utils.after_app_uninstall"
+
 # Desk Notifications
 # ------------------
 # See frappe.core.notifications.get_notification_config
@@ -277,11 +393,11 @@ app_license = "{app_license}"
 # Permissions evaluated in scripted ways
 
 # permission_query_conditions = {{
-#	"Event": "frappe.desk.doctype.event.event.get_permission_query_conditions",
+# 	"Event": "frappe.desk.doctype.event.event.get_permission_query_conditions",
 # }}
 #
 # has_permission = {{
-#	"Event": "frappe.desk.doctype.event.event.has_permission",
+# 	"Event": "frappe.desk.doctype.event.event.has_permission",
 # }}
 
 # DocType Class
@@ -289,7 +405,7 @@ app_license = "{app_license}"
 # Override standard doctype classes
 
 # override_doctype_class = {{
-#	"ToDo": "custom_app.overrides.CustomToDo"
+# 	"ToDo": "custom_app.overrides.CustomToDo"
 # }}
 
 # Document Events
@@ -297,32 +413,32 @@ app_license = "{app_license}"
 # Hook on document methods and events
 
 # doc_events = {{
-#	"*": {{
-#		"on_update": "method",
-#		"on_cancel": "method",
-#		"on_trash": "method"
-#	}}
+# 	"*": {{
+# 		"on_update": "method",
+# 		"on_cancel": "method",
+# 		"on_trash": "method"
+# 	}}
 # }}
 
 # Scheduled Tasks
 # ---------------
 
 # scheduler_events = {{
-#	"all": [
-#		"{app_name}.tasks.all"
-#	],
-#	"daily": [
-#		"{app_name}.tasks.daily"
-#	],
-#	"hourly": [
-#		"{app_name}.tasks.hourly"
-#	],
-#	"weekly": [
-#		"{app_name}.tasks.weekly"
-#	],
-#	"monthly": [
-#		"{app_name}.tasks.monthly"
-#	],
+# 	"all": [
+# 		"{app_name}.tasks.all"
+# 	],
+# 	"daily": [
+# 		"{app_name}.tasks.daily"
+# 	],
+# 	"hourly": [
+# 		"{app_name}.tasks.hourly"
+# 	],
+# 	"weekly": [
+# 		"{app_name}.tasks.weekly"
+# 	],
+# 	"monthly": [
+# 		"{app_name}.tasks.monthly"
+# 	],
 # }}
 
 # Testing
@@ -334,50 +450,64 @@ app_license = "{app_license}"
 # ------------------------------
 #
 # override_whitelisted_methods = {{
-#	"frappe.desk.doctype.event.event.get_events": "{app_name}.event.get_events"
+# 	"frappe.desk.doctype.event.event.get_events": "{app_name}.event.get_events"
 # }}
 #
 # each overriding function accepts a `data` argument;
 # generated from the base implementation of the doctype dashboard,
 # along with any modifications made in other Frappe apps
 # override_doctype_dashboards = {{
-#	"Task": "{app_name}.task.get_dashboard_data"
+# 	"Task": "{app_name}.task.get_dashboard_data"
 # }}
 
 # exempt linked doctypes from being automatically cancelled
 #
 # auto_cancel_exempted_doctypes = ["Auto Repeat"]
 
+# Ignore links to specified DocTypes when deleting documents
+# -----------------------------------------------------------
+
+# ignore_links_on_delete = ["Communication", "ToDo"]
+
+# Request Events
+# ----------------
+# before_request = ["{app_name}.utils.before_request"]
+# after_request = ["{app_name}.utils.after_request"]
+
+# Job Events
+# ----------
+# before_job = ["{app_name}.utils.before_job"]
+# after_job = ["{app_name}.utils.after_job"]
 
 # User Data Protection
 # --------------------
 
 # user_data_fields = [
-#	{{
-#		"doctype": "{{doctype_1}}",
-#		"filter_by": "{{filter_by}}",
-#		"redact_fields": ["{{field_1}}", "{{field_2}}"],
-#		"partial": 1,
-#	}},
-#	{{
-#		"doctype": "{{doctype_2}}",
-#		"filter_by": "{{filter_by}}",
-#		"partial": 1,
-#	}},
-#	{{
-#		"doctype": "{{doctype_3}}",
-#		"strict": False,
-#	}},
-#	{{
-#		"doctype": "{{doctype_4}}"
-#	}}
+# 	{{
+# 		"doctype": "{{doctype_1}}",
+# 		"filter_by": "{{filter_by}}",
+# 		"redact_fields": ["{{field_1}}", "{{field_2}}"],
+# 		"partial": 1,
+# 	}},
+# 	{{
+# 		"doctype": "{{doctype_2}}",
+# 		"filter_by": "{{filter_by}}",
+# 		"partial": 1,
+# 	}},
+# 	{{
+# 		"doctype": "{{doctype_3}}",
+# 		"strict": False,
+# 	}},
+# 	{{
+# 		"doctype": "{{doctype_4}}"
+# 	}}
 # ]
 
 # Authentication and authorization
 # --------------------------------
 
 # auth_hooks = [
-#	"{app_name}.auth.validate"
+# 	"{app_name}.auth.validate"
 # ]
 """
 
@@ -391,27 +521,6 @@ def get_data():
 			"label": _("{app_title}")
 		}}
 	]
-"""
-
-setup_template = """from setuptools import setup, find_packages
-
-with open("requirements.txt") as f:
-	install_requires = f.read().strip().split("\\n")
-
-# get version from __version__ variable in {app_name}/__init__.py
-from {app_name} import __version__ as version
-
-setup(
-	name="{app_name}",
-	version=version,
-	description="{app_description}",
-	author="{app_publisher}",
-	author_email="{app_email}",
-	packages=find_packages(),
-	zip_safe=False,
-	include_package_data=True,
-	install_requires=install_requires
-)
 """
 
 gitignore_template = """.DS_Store

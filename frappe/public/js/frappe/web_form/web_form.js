@@ -44,6 +44,7 @@ export default class WebForm extends frappe.ui.FieldGroup {
 		let field = this.fields_dict[fieldname];
 		field.df.change = () => {
 			handler(field, field.value);
+			this.refresh_dependency();
 			this.make_form_dirty();
 		};
 	}
@@ -53,6 +54,7 @@ export default class WebForm extends frappe.ui.FieldGroup {
 		this.fields.forEach((field) => {
 			if (!field.change) {
 				field.change = () => {
+					this.refresh_dependency();
 					this.make_form_dirty();
 				};
 			}
@@ -381,6 +383,8 @@ export default class WebForm extends frappe.ui.FieldGroup {
 				web_form: this.name,
 				for_payment,
 			},
+			btn: $("btn-primary"),
+			freeze: true,
 			callback: (response) => {
 				// Check for any exception in response
 				if (!response.exc) {

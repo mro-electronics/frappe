@@ -107,6 +107,10 @@ frappe.search.AwesomeBar = class AwesomeBar {
 			if (item.onclick) {
 				item.onclick(item.match);
 			} else {
+				let event = o.originalEvent;
+				if (event.ctrlKey || event.metaKey) {
+					frappe.open_in_new_tab = true;
+				}
 				frappe.set_route(item.route);
 			}
 			$input.val("");
@@ -123,7 +127,6 @@ frappe.search.AwesomeBar = class AwesomeBar {
 			}
 		});
 		frappe.search.utils.setup_recent();
-		frappe.tags.utils.fetch_tags();
 	}
 
 	add_help() {
@@ -298,7 +301,9 @@ frappe.search.AwesomeBar = class AwesomeBar {
 		var route = frappe.get_route();
 		if (route[0] === "List" && txt.indexOf(" in") === -1) {
 			// search in title field
-			var meta = frappe.get_meta(frappe.container.page.list_view.doctype);
+			const doctype = frappe.container.page?.list_view?.doctype;
+			if (!doctype) return;
+			var meta = frappe.get_meta(doctype);
 			var search_field = meta.title_field || "name";
 			var options = {};
 			options[search_field] = ["like", "%" + txt + "%"];
