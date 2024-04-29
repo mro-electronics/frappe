@@ -6,6 +6,7 @@ import frappe
 import frappe.utils
 from frappe import _
 from frappe.email.doctype.email_group.email_group import add_subscribers
+from frappe.rate_limiter import rate_limit
 from frappe.utils.safe_exec import is_job_queued
 from frappe.utils.verified_command import get_signed_params, verify_request
 from frappe.website.website_generator import WebsiteGenerator
@@ -232,7 +233,6 @@ class Newsletter(WebsiteGenerator):
 		)
 
 
-@frappe.whitelist(allow_guest=True)
 def confirmed_unsubscribe(email, group):
 	"""unsubscribe the email(user) from the mailing list(email_group)"""
 	frappe.flags.ignore_permissions = True
@@ -243,8 +243,12 @@ def confirmed_unsubscribe(email, group):
 
 
 @frappe.whitelist(allow_guest=True)
-def subscribe(email, email_group=_("Website")):  # noqa
+@rate_limit(limit=10, seconds=60 * 60)
+def subscribe(email, email_group=None):
 	"""API endpoint to subscribe an email to a particular email group. Triggers a confirmation email."""
+
+	if email_group is None:
+		email_group = get_default_email_group()
 
 	# build subscription confirmation URL
 	api_endpoint = frappe.utils.get_url(
@@ -275,9 +279,7 @@ def subscribe(email, email_group=_("Website")):  # noqa
 		content = """
 			<p>{}. {}.</p>
 			<p><a href="{}">{}</a></p>
-		""".format(
-			*translatable_content
-		)
+		""".format(*translatable_content)
 
 	frappe.sendmail(
 		email,
@@ -287,26 +289,39 @@ def subscribe(email, email_group=_("Website")):  # noqa
 
 
 @frappe.whitelist(allow_guest=True)
-def confirm_subscription(email, email_group=_("Website")):  # noqa
+def confirm_subscription(email, email_group=None):
 	"""API endpoint to confirm email subscription.
 	This endpoint is called when user clicks on the link sent to their mail.
 	"""
 	if not verify_request():
 		return
 
-	if not frappe.db.exists("Email Group", email_group):
-		frappe.get_doc({"doctype": "Email Group", "title": email_group}).insert(ignore_permissions=True)
+	if email_group is None:
+		email_group = get_default_email_group()
+
+	try:
+		group = frappe.get_doc("Email Group", email_group)
+	except frappe.DoesNotExistError:
+		group = frappe.get_doc({"doctype": "Email Group", "title": email_group}).insert(
+			ignore_permissions=True
+		)
 
 	frappe.flags.ignore_permissions = True
 
 	add_subscribers(email_group, email)
 	frappe.db.commit()
 
-	frappe.respond_as_web_page(
-		_("Confirmed"),
-		_("{0} has been successfully added to the Email Group.").format(email),
-		indicator_color="green",
-	)
+	welcome_url = group.get_welcome_url(email)
+
+	if welcome_url:
+		frappe.local.response["type"] = "redirect"
+		frappe.local.response["location"] = welcome_url
+	else:
+		frappe.respond_as_web_page(
+			_("Confirmed"),
+			_("{0} has been successfully added to the Email Group.").format(email),
+			indicator_color="green",
+		)
 
 
 def get_list_context(context=None):
@@ -348,3 +363,7 @@ def send_scheduled_email():
 
 		if not frappe.flags.in_test:
 			frappe.db.commit()
+
+
+def get_default_email_group():
+	return _("Website", lang=frappe.db.get_default("language"))

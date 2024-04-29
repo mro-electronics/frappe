@@ -13,36 +13,6 @@ class InvalidEmailCredentials(frappe.ValidationError):
 	pass
 
 
-def send(email, append_to=None, retry=1):
-	"""Deprecated: Send the message or add it to Outbox Email"""
-
-	def _send(retry):
-		from frappe.email.doctype.email_account.email_account import EmailAccount
-
-		try:
-			email_account = EmailAccount.find_outgoing(match_by_doctype=append_to)
-			smtpserver = email_account.get_smtp_server()
-
-			# validate is called in as_string
-			email_body = email.as_string()
-
-			smtpserver.sess.sendmail(email.sender, email.recipients + (email.cc or []), email_body)
-		except smtplib.SMTPSenderRefused:
-			frappe.throw(_("Invalid login or password"), title="Email Failed")
-			raise
-		except smtplib.SMTPRecipientsRefused:
-			frappe.msgprint(_("Invalid recipient address"), title="Email Failed")
-			raise
-		except (smtplib.SMTPServerDisconnected, smtplib.SMTPAuthenticationError):
-			if not retry:
-				raise
-			else:
-				retry = retry - 1
-				_send(retry)
-
-	_send(retry)
-
-
 class SMTPServer:
 	def __init__(
 		self,
@@ -54,9 +24,7 @@ class SMTPServer:
 		use_tls=None,
 		use_ssl=None,
 		use_oauth=0,
-		refresh_token=None,
 		access_token=None,
-		service=None,
 	):
 		self.login = login
 		self.email_account = email_account
@@ -66,9 +34,7 @@ class SMTPServer:
 		self.use_tls = use_tls
 		self.use_ssl = use_ssl
 		self.use_oauth = use_oauth
-		self.refresh_token = refresh_token
 		self.access_token = access_token
-		self.service = service
 		self._session = None
 
 		if not self.server:
@@ -112,9 +78,7 @@ class SMTPServer:
 			self.secure_session(_session)
 
 			if self.use_oauth:
-				Oauth(
-					_session, self.email_account, self.login, self.access_token, self.refresh_token, self.service
-				).connect()
+				Oauth(_session, self.email_account, self.login, self.access_token).connect()
 
 			elif self.password:
 				res = _session.login(str(self.login or ""), str(self.password or ""))
@@ -129,9 +93,12 @@ class SMTPServer:
 		except smtplib.SMTPAuthenticationError:
 			self.throw_invalid_credentials_exception()
 
-		except OSError:
+		except OSError as e:
 			# Invalid mail server -- due to refusing connection
-			frappe.throw(_("Invalid Outgoing Mail Server or Port"), title=_("Incorrect Configuration"))
+			frappe.throw(
+				_("Invalid Outgoing Mail Server or Port: {0}").format(str(e)),
+				title=_("Incorrect Configuration"),
+			)
 
 	def is_session_active(self):
 		if self._session:

@@ -52,9 +52,7 @@ class Exporter:
 		self.add_data()
 
 	def get_all_exportable_fields(self):
-		child_table_fields = [
-			df.fieldname for df in self.meta.fields if df.fieldtype in table_fieldtypes
-		]
+		child_table_fields = [df.fieldname for df in self.meta.fields if df.fieldtype in table_fieldtypes]
 
 		meta = frappe.get_meta(self.doctype)
 		exportable_fields = frappe._dict({})
@@ -109,7 +107,7 @@ class Exporter:
 		fields = [df for df in fields if is_exportable(df)]
 
 		if "name" in fieldnames:
-			fields = [name_field] + fields
+			fields = [name_field, *fields]
 
 		return fields or []
 
@@ -167,7 +165,7 @@ class Exporter:
 		parent_data = frappe.db.get_list(
 			self.doctype,
 			filters=filters,
-			fields=["name"] + parent_fields,
+			fields=["name", *parent_fields],
 			limit_page_length=self.export_page_length,
 			order_by=order_by,
 			as_list=0,
@@ -180,9 +178,13 @@ class Exporter:
 				continue
 			child_table_df = self.meta.get_field(key)
 			child_table_doctype = child_table_df.options
-			child_fields = ["name", "idx", "parent", "parentfield"] + list(
-				{format_column_name(df) for df in self.fields if df.parent == child_table_doctype}
-			)
+			child_fields = [
+				"name",
+				"idx",
+				"parent",
+				"parentfield",
+				*list({format_column_name(df) for df in self.fields if df.parent == child_table_doctype}),
+			]
 			data = frappe.get_all(
 				child_table_doctype,
 				filters={
@@ -199,7 +201,7 @@ class Exporter:
 		# Group children data by parent name
 		grouped_children_data = self.group_children_data_by_parent(child_data)
 		for doc in parent_data:
-			related_children_docs = grouped_children_data.get(doc.name, {})
+			related_children_docs = grouped_children_data.get(str(doc.name), {})
 			yield {**doc, **related_children_docs}
 
 	def add_header(self):
@@ -207,9 +209,9 @@ class Exporter:
 		for df in self.fields:
 			is_parent = not df.is_child_table_field
 			if is_parent:
-				label = _(df.label)
+				label = _(df.label or df.fieldname)
 			else:
-				label = f"{_(df.label)} ({_(df.child_table_df.label)})"
+				label = f"{_(df.label or df.fieldname)} ({_(df.child_table_df.label or df.child_table_df.fieldname)})"
 
 			if label in header:
 				# this label is already in the header,

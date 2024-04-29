@@ -8,6 +8,7 @@ frappe.ui.form.ControlSignature = class ControlSignature extends frappe.ui.form.
 		if (this.df.label) {
 			$(this.wrapper).find("label").text(__(this.df.label));
 		}
+		this.set_doc_url();
 
 		frappe.require("/assets/frappe/js/lib/jSignature.min.js").then(() => {
 			// make jSignature field
@@ -131,5 +132,8 @@ frappe.ui.form.ControlSignature = class ControlSignature extends frappe.ui.form.
 		var base64_img = this.$pad.jSignature("getData");
 		this.set_my_value(base64_img);
 		this.set_image(this.get_value());
+	}
+	on_section_collapse() {
+		this.refresh();
 	}
 };

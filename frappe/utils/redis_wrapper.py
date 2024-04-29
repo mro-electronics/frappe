@@ -112,7 +112,7 @@ class RedisWrapper(redis.Redis):
 
 	def delete_value(self, keys, user=None, make_keys=True, shared=False):
 		"""Delete value, list of values."""
-		if not isinstance(keys, (list, tuple)):
+		if not isinstance(keys, list | tuple):
 			keys = (keys,)
 
 		for key in keys:
@@ -172,6 +172,10 @@ class RedisWrapper(redis.Redis):
 			return super().hexists(_name, key)
 		except redis.exceptions.ConnectionError:
 			return False
+
+	def exists(self, *names: str, user=None, shared=None) -> int:
+		names = [self.make_key(n, user=user, shared=shared) for n in names]
+		return super().exists(*names)
 
 	def hgetall(self, name):
 		value = super().hgetall(self.make_key(name))

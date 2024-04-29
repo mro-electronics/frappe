@@ -1,10 +1,10 @@
 # Copyright (c) 2015, Frappe Technologies Pvt. Ltd. and Contributors
 # License: MIT. See LICENSE
-
 import frappe
 from frappe.cache_manager import clear_controller_cache
 from frappe.desk.doctype.todo.todo import ToDo
-from frappe.tests.utils import FrappeTestCase
+from frappe.tests.test_api import FrappeAPITestCase
+from frappe.tests.utils import FrappeTestCase, patch_hooks
 
 
 class TestHooks(FrappeTestCase):
@@ -59,10 +59,64 @@ class TestHooks(FrappeTestCase):
 		address.flags.dont_touch_me = True
 		self.assertFalse(frappe.has_permission("Address", doc=address, user=username))
 
+	def test_ignore_links_on_delete(self):
+		email_unsubscribe = frappe.get_doc(
+			{"doctype": "Email Unsubscribe", "email": "test@example.com", "global_unsubscribe": 1}
+		).insert()
+
+		event = frappe.get_doc(
+			{
+				"doctype": "Event",
+				"subject": "Test Event",
+				"starts_on": "2022-12-21",
+				"event_type": "Public",
+				"event_participants": [
+					{
+						"reference_doctype": "Email Unsubscribe",
+						"reference_docname": email_unsubscribe.name,
+					}
+				],
+			}
+		).insert()
+		self.assertRaises(frappe.LinkExistsError, email_unsubscribe.delete)
+
+		event.event_participants = []
+		event.save()
+
+		todo = frappe.get_doc(
+			{
+				"doctype": "ToDo",
+				"description": "Test ToDo",
+				"reference_type": "Event",
+				"reference_name": event.name,
+			}
+		)
+		todo.insert()
+
+		event.delete()
+
+
+class TestAPIHooks(FrappeAPITestCase):
+	def test_auth_hook(self):
+		with patch_hooks({"auth_hooks": ["frappe.tests.test_hooks.custom_auth"]}):
+			site_url = frappe.utils.get_site_url(frappe.local.site)
+			response = self.get(
+				site_url + "/api/method/frappe.auth.get_logged_user",
+				headers={"Authorization": "Bearer set_test_example_user"},
+			)
+			# Test!
+			self.assertTrue(response.json.get("message") == "test@example.com")
+
 
 def custom_has_permission(doc, ptype, user):
 	if doc.flags.dont_touch_me:
 		return False
+
+
+def custom_auth():
+	auth_type, token = frappe.get_request_header("Authorization", "Bearer ").split(" ")
+	if token == "set_test_example_user":
+		frappe.set_user("test@example.com")
 
 
 class CustomToDo(ToDo):

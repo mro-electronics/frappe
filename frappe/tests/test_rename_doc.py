@@ -8,6 +8,7 @@ from random import choice, sample
 from unittest.mock import patch
 
 import frappe
+from frappe.core.doctype.doctype.test_doctype import new_doctype
 from frappe.exceptions import DoesNotExistError, ValidationError
 from frappe.model.base_document import get_controller
 from frappe.model.rename_doc import (
@@ -22,7 +23,7 @@ from frappe.utils import add_to_date, now
 
 
 @contextmanager
-def patch_db(endpoints: list[str] = None):
+def patch_db(endpoints: list[str] | None = None):
 	patched_endpoints = []
 
 	for point in endpoints:
@@ -140,9 +141,7 @@ class TestRenameDoc(FrappeTestCase):
 		second_todo_doc.priority = "High"
 		second_todo_doc.save()
 
-		merged_todo = frappe.rename_doc(
-			self.test_doctype, first_todo, second_todo, merge=True, force=True
-		)
+		merged_todo = frappe.rename_doc(self.test_doctype, first_todo, second_todo, merge=True, force=True)
 		merged_todo_doc = frappe.get_doc(self.test_doctype, merged_todo)
 		self.available_documents.remove(first_todo)
 
@@ -196,9 +195,7 @@ class TestRenameDoc(FrappeTestCase):
 		)
 
 		# Test if Doctype value has changed in Link field
-		linked_to_doctype = frappe.db.get_value(
-			"Renamed Doc", to_rename_record.name, "linked_to_doctype"
-		)
+		linked_to_doctype = frappe.db.get_value("Renamed Doc", to_rename_record.name, "linked_to_doctype")
 		self.assertEqual(linked_to_doctype, "Renamed Doc")
 
 		# Test if there are conflicts between a record and a DocType
@@ -271,3 +268,29 @@ class TestRenameDoc(FrappeTestCase):
 		self.assertEqual(doc.name, new_name)
 		self.available_documents.append(new_name)
 		self.available_documents.remove(name)
+
+	def test_parenttype(self):
+		child = new_doctype(istable=1).insert()
+		table_field = {
+			"label": "Test Table",
+			"fieldname": "test_table",
+			"fieldtype": "Table",
+			"options": child.name,
+		}
+
+		parent_a = new_doctype(fields=[table_field], allow_rename=1, autoname="Prompt").insert()
+		parent_b = new_doctype(fields=[table_field], allow_rename=1, autoname="Prompt").insert()
+
+		parent_a_instance = frappe.get_doc(
+			doctype=parent_a.name, test_table=[{"some_fieldname": "x"}], name="XYZ"
+		).insert()
+
+		parent_b_instance = frappe.get_doc(
+			doctype=parent_b.name, test_table=[{"some_fieldname": "x"}], name="XYZ"
+		).insert()
+
+		parent_b_instance.rename("ABC")
+		parent_a_instance.reload()
+
+		self.assertEqual(len(parent_a_instance.test_table), 1)
+		self.assertEqual(len(parent_b_instance.test_table), 1)

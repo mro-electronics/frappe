@@ -26,7 +26,7 @@ if TYPE_CHECKING:
 
 class LDAPSettings(Document):
 	def validate(self):
-		self.default_user_type = self.default_user_type or "System User"
+		self.default_user_type = self.default_user_type or "Website User"
 
 		if not self.enabled:
 			return
@@ -39,7 +39,6 @@ class LDAPSettings(Document):
 				and self.ldap_search_string
 				and "{0}" in self.ldap_search_string
 			):
-
 				conn = self.connect_to_ldap(
 					base_dn=self.base_dn, password=self.get_password(raise_exception=False)
 				)
@@ -53,7 +52,9 @@ class LDAPSettings(Document):
 						)
 
 						conn.search(
-							search_base=self.ldap_search_path_group, search_filter="(objectClass=*)", attributes=["cn"]
+							search_base=self.ldap_search_path_group,
+							search_filter="(objectClass=*)",
+							attributes=["cn"],
 						)
 
 				except LDAPAttributeError as ex:
@@ -143,7 +144,7 @@ class LDAPSettings(Document):
 			setattr(user, key, value)
 		user.save(ignore_permissions=True)
 
-	def sync_roles(self, user: "User", additional_groups: list = None):
+	def sync_roles(self, user: "User", additional_groups: list | None = None):
 		current_roles = {d.role for d in user.get("roles")}
 		if self.default_user_type == "System User":
 			needed_roles = {self.default_role}
@@ -152,9 +153,7 @@ class LDAPSettings(Document):
 		lower_groups = [g.lower() for g in additional_groups or []]
 
 		all_mapped_roles = {r.erpnext_role for r in self.ldap_groups}
-		matched_roles = {
-			r.erpnext_role for r in self.ldap_groups if r.ldap_group.lower() in lower_groups
-		}
+		matched_roles = {r.erpnext_role for r in self.ldap_groups if r.ldap_group.lower() in lower_groups}
 		unmatched_roles = all_mapped_roles.difference(matched_roles)
 		needed_roles.update(matched_roles)
 		roles_to_remove = current_roles.intersection(unmatched_roles)
@@ -165,7 +164,7 @@ class LDAPSettings(Document):
 
 		user.remove_roles(*roles_to_remove)
 
-	def create_or_update_user(self, user_data: dict, groups: list = None):
+	def create_or_update_user(self, user_data: dict, groups: list | None = None):
 		user: "User" = None
 		role: str = None
 
@@ -302,9 +301,7 @@ class LDAPSettings(Document):
 	def reset_password(self, user, password, logout_sessions=False):
 		search_filter = f"({self.ldap_email_field}={user})"
 
-		conn = self.connect_to_ldap(
-			self.base_dn, self.get_password(raise_exception=False), read_only=False
-		)
+		conn = self.connect_to_ldap(self.base_dn, self.get_password(raise_exception=False), read_only=False)
 
 		if conn.search(
 			search_base=self.ldap_search_path_user,
@@ -370,13 +367,15 @@ def login():
 	args = frappe.form_dict
 	ldap: LDAPSettings = frappe.get_doc("LDAP Settings")
 
-	user = ldap.authenticate(frappe.as_unicode(args.usr), frappe.as_unicode(args.pop("pwd", None)))
+	user = ldap.authenticate(frappe.as_unicode(args.usr), frappe.as_unicode(args.pwd))
 
 	frappe.local.login_manager.user = user.name
 	if should_run_2fa(user.name):
 		authenticate_for_2factor(user.name)
 		if not confirm_otp_token(frappe.local.login_manager):
 			return False
+
+	frappe.form_dict.pop("pwd", None)
 	frappe.local.login_manager.post_login()
 
 	# because of a GET request!

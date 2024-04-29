@@ -57,13 +57,19 @@ def update_comment(name, content):
 	if frappe.session.user not in ["Administrator", doc.owner]:
 		frappe.throw(_("Comment can only be edited by the owner"), frappe.PermissionError)
 
-	doc.content = content
+	if doc.reference_doctype and doc.reference_name:
+		reference_doc = frappe.get_doc(doc.reference_doctype, doc.reference_name)
+		reference_doc.check_permission()
+
+		doc.content = extract_images_from_html(reference_doc, content, is_private=True)
+	else:
+		doc.content = content
+
 	doc.save(ignore_permissions=True)
 
 
 @frappe.whitelist()
 def get_next(doctype, value, prev, filters=None, sort_order="desc", sort_field="modified"):
-
 	prev = int(prev)
 	if not filters:
 		filters = []
@@ -99,6 +105,4 @@ def get_next(doctype, value, prev, filters=None, sort_order="desc", sort_field="
 
 
 def get_pdf_link(doctype, docname, print_format="Standard", no_letterhead=0):
-	return "/api/method/frappe.utils.print_format.download_pdf?doctype={doctype}&name={docname}&format={print_format}&no_letterhead={no_letterhead}".format(
-		doctype=doctype, docname=docname, print_format=print_format, no_letterhead=no_letterhead
-	)
+	return f"/api/method/frappe.utils.print_format.download_pdf?doctype={doctype}&name={docname}&format={print_format}&no_letterhead={no_letterhead}"

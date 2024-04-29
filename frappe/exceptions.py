@@ -240,6 +240,14 @@ class InReadOnlyMode(ValidationError):
 	http_status_code = 503  # temporarily not available
 
 
+class SessionBootFailed(ValidationError):
+	http_status_code = 500
+
+
+class PrintFormatError(ValidationError):
+	pass
+
+
 class TooManyWritesError(Exception):
 	pass
 
@@ -262,6 +270,10 @@ class InvalidDatabaseFile(ValidationError):
 
 
 class ExecutableNotFound(FileNotFoundError):
+	pass
+
+
+class InvalidRoundingMethod(FileNotFoundError):
 	pass
 
 

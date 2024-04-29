@@ -7,6 +7,7 @@ context("Date Control", () => {
 	function get_dialog(date_field_options) {
 		return cy.dialog({
 			title: "Date",
+			animate: false,
 			fields: [
 				{
 					label: "Date",
@@ -19,7 +20,7 @@ context("Date Control", () => {
 		});
 	}
 
-	it("Selecting a date from the datepicker", () => {
+	it("Selecting a date from the datepicker & check prev & next button", () => {
 		cy.clear_dialogs();
 		cy.clear_datepickers();
 
@@ -39,13 +40,7 @@ context("Date Control", () => {
 
 		// Verify if the selected date is set the date field
 		cy.window().its("cur_dialog.fields_dict.date.value").should("be.equal", "2020-01-15");
-	});
 
-	it("Checking next and previous button", () => {
-		cy.clear_dialogs();
-		cy.clear_datepickers();
-
-		get_dialog({ default: "2020-01-15" }).as("dialog");
 		cy.get_field("date", "Date").click();
 
 		//Clicking on the next button in the datepicker
@@ -81,6 +76,8 @@ context("Date Control", () => {
 
 		//Verifying if clicking on "Today" button matches today's date
 		cy.window().then((win) => {
+			// `expect` can not wait like `should`
+			cy.wait(500);
 			expect(win.cur_dialog.fields_dict.date.value).to.be.equal(
 				win.frappe.datetime.get_today()
 			);

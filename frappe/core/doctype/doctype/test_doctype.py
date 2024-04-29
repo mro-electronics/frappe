@@ -172,32 +172,6 @@ class TestDocType(FrappeTestCase):
 				if condition:
 					self.assertFalse(re.match(pattern, condition))
 
-	def test_data_field_options(self):
-		doctype_name = "Test Data Fields"
-		valid_data_field_options = frappe.model.data_field_options + ("",)
-		invalid_data_field_options = ("Invalid Option 1", frappe.utils.random_string(5))
-
-		for field_option in valid_data_field_options + invalid_data_field_options:
-			test_doctype = frappe.get_doc(
-				{
-					"doctype": "DocType",
-					"name": doctype_name,
-					"module": "Core",
-					"custom": 1,
-					"fields": [
-						{"fieldname": f"{field_option}_field", "fieldtype": "Data", "options": field_option}
-					],
-				}
-			)
-
-			if field_option in invalid_data_field_options:
-				# assert that only data options in frappe.model.data_field_options are valid
-				self.assertRaises(frappe.ValidationError, test_doctype.insert)
-			else:
-				test_doctype.insert()
-				self.assertEqual(test_doctype.name, doctype_name)
-				test_doctype.delete()
-
 	def test_sync_field_order(self):
 		import os
 
@@ -238,9 +212,7 @@ class TestDocType(FrappeTestCase):
 			self.assertListEqual(
 				[f["fieldname"] for f in test_doctype_json["fields"]], test_doctype_json["field_order"]
 			)
-			self.assertListEqual(
-				[f["fieldname"] for f in test_doctype_json["fields"]], initial_fields_order
-			)
+			self.assertListEqual([f["fieldname"] for f in test_doctype_json["fields"]], initial_fields_order)
 			self.assertListEqual(test_doctype_json["field_order"], initial_fields_order)
 
 			# remove field_order to test reload_doc/sync/migrate is backwards compatible without field_order
@@ -264,9 +236,7 @@ class TestDocType(FrappeTestCase):
 			self.assertListEqual(
 				[f["fieldname"] for f in test_doctype_json["fields"]], test_doctype_json["field_order"]
 			)
-			self.assertListEqual(
-				[f["fieldname"] for f in test_doctype_json["fields"]], initial_fields_order
-			)
+			self.assertListEqual([f["fieldname"] for f in test_doctype_json["fields"]], initial_fields_order)
 			self.assertListEqual(test_doctype_json["field_order"], initial_fields_order)
 
 			# reorder fields: swap row 1 and 3
@@ -277,9 +247,7 @@ class TestDocType(FrappeTestCase):
 			# assert that reordering fields only affects `field_order` rather than `fields` attr
 			test_doctype.save()
 			test_doctype_json = frappe.get_file_json(path)
-			self.assertListEqual(
-				[f["fieldname"] for f in test_doctype_json["fields"]], initial_fields_order
-			)
+			self.assertListEqual([f["fieldname"] for f in test_doctype_json["fields"]], initial_fields_order)
 			self.assertListEqual(
 				test_doctype_json["field_order"], ["field_3", "field_2", "field_1", "field_4"]
 			)
@@ -552,13 +520,14 @@ class TestDocType(FrappeTestCase):
 		self.assertRaises(InvalidFieldNameError, validate_links_table_fieldnames, doc)
 
 	def test_create_virtual_doctype(self):
-		"""Test virtual DOcTYpe."""
+		"""Test virtual DocType."""
 		virtual_doc = new_doctype("Test Virtual Doctype")
 		virtual_doc.is_virtual = 1
-		virtual_doc.insert()
-		virtual_doc.save()
+		virtual_doc.insert(ignore_if_duplicate=True)
+		virtual_doc.reload()
 		doc = frappe.get_doc("DocType", "Test Virtual Doctype")
 
+		self.assertDictEqual(doc.as_dict(), virtual_doc.as_dict())
 		self.assertEqual(doc.is_virtual, 1)
 		self.assertFalse(frappe.db.table_exists("Test Virtual Doctype"))
 
@@ -719,12 +688,36 @@ class TestDocType(FrappeTestCase):
 		self.assertEqual(frappe.get_meta(doctype).get_field(field).default, "DELETETHIS")
 		frappe.delete_doc("DocType", doctype)
 
+	def test_not_in_list_view_for_not_allowed_mandatory_field(self):
+		doctype = new_doctype(
+			fields=[
+				{
+					"fieldname": "cover_image",
+					"fieldtype": "Attach Image",
+					"label": "Cover Image",
+					"reqd": 1,  # mandatory
+				},
+				{
+					"fieldname": "book_name",
+					"fieldtype": "Data",
+					"label": "Book Name",
+					"reqd": 1,  # mandatory
+				},
+			],
+		).insert()
+
+		self.assertFalse(doctype.fields[0].in_list_view)
+		self.assertTrue(doctype.fields[1].in_list_view)
+		frappe.delete_doc("DocType", doctype.name)
+
 
 def new_doctype(
 	name: str | None = None,
 	unique: bool = False,
 	depends_on: str = "",
 	fields: list[dict] | None = None,
+	custom: bool = True,
+	default: str | None = None,
 	**kwargs,
 ):
 	if not name:
@@ -735,13 +728,14 @@ def new_doctype(
 		{
 			"doctype": "DocType",
 			"module": "Core",
-			"custom": 1,
+			"custom": custom,
 			"fields": [
 				{
 					"label": "Some Field",
 					"fieldname": "some_fieldname",
 					"fieldtype": "Data",
 					"unique": unique,
+					"default": default,
 					"depends_on": depends_on,
 				}
 			],
@@ -756,8 +750,7 @@ def new_doctype(
 		}
 	)
 
-	if fields:
-		for f in fields:
-			doc.append("fields", f)
+	if fields and len(fields) > 0:
+		doc.set("fields", fields)
 
 	return doc

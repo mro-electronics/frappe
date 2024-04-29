@@ -41,6 +41,14 @@ def make_put_request(url, **kwargs):
 	return make_request("PUT", url, **kwargs)
 
 
+def make_patch_request(url, **kwargs):
+	return make_request("PATCH", url, **kwargs)
+
+
+def make_delete_request(url, **kwargs):
+	return make_request("DELETE", url, **kwargs)
+
+
 def create_request_log(
 	data,
 	integration_type=None,
@@ -97,5 +105,5 @@ def get_json(obj):
 
 
 def json_handler(obj):
-	if isinstance(obj, (datetime.date, datetime.timedelta, datetime.datetime)):
+	if isinstance(obj, datetime.date | datetime.timedelta | datetime.datetime):
 		return str(obj)

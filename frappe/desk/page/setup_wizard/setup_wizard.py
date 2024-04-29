@@ -13,7 +13,6 @@ from . import install_fixtures
 
 
 def get_setup_stages(args):
-
 	# App setup stage functions should not include frappe.db.commit
 	# That is done by frappe after successful completion of all stages
 	stages = [
@@ -33,9 +32,7 @@ def get_setup_stages(args):
 			# post executing hooks
 			"status": "Wrapping up",
 			"fail_msg": "Failed to complete setup",
-			"tasks": [
-				{"fn": run_post_setup_complete, "args": args, "fail_msg": "Failed to complete setup"}
-			],
+			"tasks": [{"fn": run_post_setup_complete, "args": args, "fail_msg": "Failed to complete setup"}],
 		}
 	)
 
@@ -64,6 +61,9 @@ def setup_complete(args):
 
 @frappe.task()
 def process_setup_stages(stages, user_input, is_background_task=False):
+	from frappe.utils.telemetry import capture
+
+	capture("initated_server_side", "setup")
 	try:
 		frappe.flags.in_setup_wizard = True
 		current_task = None
@@ -88,6 +88,7 @@ def process_setup_stages(stages, user_input, is_background_task=False):
 		)
 	else:
 		run_setup_success(user_input)
+		capture("completed_server_side", "setup")
 		if not is_background_task:
 			return {"status": "ok"}
 		frappe.publish_realtime("setup_task", {"status": "ok"}, user=frappe.session.user)
@@ -170,6 +171,7 @@ def update_system_settings(args):
 			"number_format": number_format,
 			"enable_scheduler": 1 if not frappe.flags.in_test else 0,
 			"backup_limit": 3,  # Default for downloadable backups
+			"enable_telemetry": cint(args.get("enable_telemetry")),
 		}
 	)
 	system_settings.save()
@@ -267,10 +269,10 @@ def add_all_roles_to(name):
 
 def disable_future_access():
 	frappe.db.set_default("desktop:home_page", "workspace")
-	frappe.db.set_value("System Settings", "System Settings", "setup_complete", 1)
+	frappe.db.set_single_value("System Settings", "setup_complete", 1)
 
 	# Enable onboarding after install
-	frappe.db.set_value("System Settings", "System Settings", "enable_onboarding", 1)
+	frappe.db.set_single_value("System Settings", "enable_onboarding", 1)
 
 	if not frappe.flags.in_test:
 		# remove all roles and add 'Administrator' to prevent future access
@@ -371,7 +373,7 @@ def email_setup_wizard_exception(traceback, args):
 		traceback=traceback,
 		args="\n".join(pretty_args),
 		user=frappe.session.user,
-		headers=frappe.request.headers,
+		headers=frappe.request.headers if frappe.request else "[no request]",
 	)
 
 	frappe.sendmail(

@@ -156,9 +156,7 @@ class TestUserPermission(FrappeTestCase):
 			doc.is_tree = 1
 			doc.insert()
 
-		parent_record = frappe.get_doc(
-			{"doctype": "Person", "person_name": "Parent", "is_group": 1}
-		).insert()
+		parent_record = frappe.get_doc({"doctype": "Person", "person_name": "Parent", "is_group": 1}).insert()
 
 		child_record = frappe.get_doc(
 			{
@@ -277,7 +275,7 @@ def create_user(email, *roles):
 
 	user = frappe.new_doc("User")
 	user.email = email
-	user.first_name = email.split("@")[0]
+	user.first_name = email.split("@", 1)[0]
 
 	if not roles:
 		roles = ("System Manager",)

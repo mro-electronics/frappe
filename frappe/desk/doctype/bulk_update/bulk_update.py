@@ -8,32 +8,49 @@ from frappe.utils import cint
 
 
 class BulkUpdate(Document):
-	pass
+	@frappe.whitelist()
+	def bulk_update(self):
+		self.check_permission("write")
+		limit = self.limit if self.limit and cint(self.limit) < 500 else 500
 
+		condition = ""
+		if self.condition:
+			if ";" in self.condition:
+				frappe.throw(_("; not allowed in condition"))
 
-@frappe.whitelist()
-def update(doctype, field, value, condition="", limit=500):
-	if not limit or cint(limit) > 500:
-		limit = 500
+			condition = f" where {self.condition}"
 
-	if condition:
-		condition = " where " + condition
-
-	if ";" in condition:
-		frappe.throw(_("; not allowed in condition"))
-
-	docnames = frappe.db.sql_list(
-		f"""select name from `tab{doctype}`{condition} limit {limit} offset 0"""
-	)
-	data = {}
-	data[field] = value
-	return submit_cancel_or_update_docs(doctype, docnames, "update", data)
+		docnames = frappe.db.sql_list(
+			f"""select name from `tab{self.document_type}`{condition} limit {limit} offset 0"""
+		)
+		return submit_cancel_or_update_docs(
+			self.document_type, docnames, "update", {self.field: self.update_value}
+		)
 
 
 @frappe.whitelist()
 def submit_cancel_or_update_docs(doctype, docnames, action="submit", data=None):
-	docnames = frappe.parse_json(docnames)
+	if isinstance(docnames, str):
+		docnames = frappe.parse_json(docnames)
 
+	if len(docnames) < 20:
+		return _bulk_action(doctype, docnames, action, data)
+	elif len(docnames) <= 500:
+		frappe.msgprint(_("Bulk operation is enqueued in background."), alert=True)
+		frappe.enqueue(
+			_bulk_action,
+			doctype=doctype,
+			docnames=docnames,
+			action=action,
+			data=data,
+			queue="short",
+			timeout=1000,
+		)
+	else:
+		frappe.throw(_("Bulk operations only support up to 500 documents."), title=_("Too Many Documents"))
+
+
+def _bulk_action(doctype, docnames, action, data):
 	if data:
 		data = frappe.parse_json(data)
 
@@ -67,5 +84,4 @@ def submit_cancel_or_update_docs(doctype, docnames, action="submit", data=None):
 
 def show_progress(docnames, message, i, description):
 	n = len(docnames)
-	if n >= 10:
-		frappe.publish_progress(float(i) * 100 / n, title=message, description=description)
+	frappe.publish_progress(float(i) * 100 / n, title=message, description=description)

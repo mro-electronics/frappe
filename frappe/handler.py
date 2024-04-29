@@ -32,6 +32,8 @@ ALLOWED_MIMETYPES = (
 	"application/vnd.oasis.opendocument.text",
 	"application/vnd.oasis.opendocument.spreadsheet",
 	"text/plain",
+	"video/quicktime",
+	"video/mp4",
 )
 
 
@@ -189,13 +191,25 @@ def upload_file():
 	optimize = frappe.form_dict.optimize
 	content = None
 
+	if library_file := frappe.form_dict.get("library_file_name"):
+		frappe.has_permission("File", doc=library_file, throw=True)
+		doc = frappe.get_value(
+			"File",
+			frappe.form_dict.library_file_name,
+			["is_private", "file_url", "file_name"],
+			as_dict=True,
+		)
+		is_private = doc.is_private
+		file_url = doc.file_url
+		filename = doc.file_name
+
 	if "file" in files:
 		file = files["file"]
 		content = file.stream.read()
 		filename = file.filename
 
 		content_type = guess_type(filename)[0]
-		if optimize and content_type.startswith("image/"):
+		if optimize and content_type and content_type.startswith("image/"):
 			args = {"content": content, "content_type": content_type}
 			if frappe.form_dict.max_width:
 				args["max_width"] = int(frappe.form_dict.max_width)
@@ -206,9 +220,7 @@ def upload_file():
 	frappe.local.uploaded_file = content
 	frappe.local.uploaded_filename = filename
 
-	if content is not None and (
-		frappe.session.user == "Guest" or (user and not user.has_desk_access())
-	):
+	if content is not None and (frappe.session.user == "Guest" or (user and not user.has_desk_access())):
 		filetype = guess_type(filename)[0]
 		if filetype not in ALLOWED_MIMETYPES:
 			frappe.throw(_("You can only upload JPG, PNG, PDF, TXT or Microsoft documents."))

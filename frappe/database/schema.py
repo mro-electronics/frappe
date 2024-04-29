@@ -17,18 +17,18 @@ class DBTable:
 		self.doctype = doctype
 		self.table_name = f"tab{doctype}"
 		self.meta = meta or frappe.get_meta(doctype, False)
-		self.columns = {}
+		self.columns: dict[str, DbColumn] = {}
 		self.current_columns = {}
 
 		# lists for change
-		self.add_column = []
-		self.change_type = []
-		self.change_name = []
-		self.add_unique = []
-		self.add_index = []
-		self.drop_unique = []
-		self.drop_index = []
-		self.set_default = []
+		self.add_column: list[DbColumn] = []
+		self.change_type: list[DbColumn] = []
+		self.change_name: list[DbColumn] = []
+		self.add_unique: list[DbColumn] = []
+		self.add_index: list[DbColumn] = []
+		self.drop_unique: list[DbColumn] = []
+		self.drop_index: list[DbColumn] = []
+		self.set_default: list[DbColumn] = []
 
 		# load
 		self.get_columns_from_docfields()
@@ -47,7 +47,7 @@ class DBTable:
 		pass
 
 	def get_column_definitions(self):
-		column_list = [] + frappe.db.DEFAULT_COLUMNS
+		column_list = [*frappe.db.DEFAULT_COLUMNS]
 		ret = []
 		for k in list(self.columns):
 			if k not in column_list:
@@ -123,7 +123,6 @@ class DBTable:
 				)
 
 			if "varchar" in frappe.db.type_map.get(col.fieldtype, ()):
-
 				# validate length range
 				new_length = cint(col.length) or cint(frappe.db.VARCHAR_LEN)
 				if not (1 <= new_length <= 1000):
@@ -142,9 +141,7 @@ class DBTable:
 					try:
 						# check for truncation
 						max_length = frappe.db.sql(
-							"""SELECT MAX(CHAR_LENGTH(`{fieldname}`)) FROM `tab{doctype}`""".format(
-								fieldname=col.fieldname, doctype=self.doctype
-							)
+							f"""SELECT MAX(CHAR_LENGTH(`{col.fieldname}`)) FROM `tab{self.doctype}`"""
 						)
 
 					except frappe.db.InternalError as e:
@@ -174,9 +171,7 @@ class DBTable:
 
 
 class DbColumn:
-	def __init__(
-		self, table, fieldname, fieldtype, length, default, set_index, options, unique, precision
-	):
+	def __init__(self, table, fieldname, fieldtype, length, default, set_index, options, unique, precision):
 		self.table = table
 		self.fieldname = fieldname
 		self.fieldtype = fieldtype
@@ -187,7 +182,7 @@ class DbColumn:
 		self.unique = unique
 		self.precision = precision
 
-	def get_definition(self, with_default=1):
+	def get_definition(self, for_modification=False):
 		column_def = get_definition(self.fieldtype, precision=self.precision, length=self.length)
 
 		if not column_def:
@@ -205,11 +200,10 @@ class DbColumn:
 			self.default
 			and (self.default not in frappe.db.DEFAULT_SHORTCUTS)
 			and not cstr(self.default).startswith(":")
-			and column_def not in ("text", "longtext")
 		):
 			column_def += f" default {frappe.db.escape(self.default)}"
 
-		if self.unique and (column_def not in ("text", "longtext")):
+		if self.unique and not for_modification and (column_def not in ("text", "longtext")):
 			column_def += " unique"
 
 		return column_def
@@ -248,7 +242,6 @@ class DbColumn:
 			self.default_changed(current_def)
 			and (self.default not in frappe.db.DEFAULT_SHORTCUTS)
 			and not cstr(self.default).startswith(":")
-			and not (column_type in ["text", "longtext"])
 		):
 			self.table.set_default.append(self)
 
@@ -256,7 +249,7 @@ class DbColumn:
 		if (current_def["index"] and not self.set_index) and column_type not in ("text", "longtext"):
 			self.table.drop_index.append(self)
 
-		elif (not current_def["index"] and self.set_index) and not (column_type in ("text", "longtext")):
+		elif (not current_def["index"] and self.set_index) and column_type not in ("text", "longtext"):
 			self.table.add_index.append(self)
 
 	def default_changed(self, current_def):
@@ -357,16 +350,9 @@ def get_definition(fieldtype, precision=None, length=None):
 	return coltype
 
 
-def add_column(
-	doctype, column_name, fieldtype, precision=None, length=None, default=None, not_null=False
-):
-	if column_name in frappe.db.get_table_columns(doctype):
-		# already exists
-		return
-
+def add_column(doctype, column_name, fieldtype, precision=None, length=None, default=None, not_null=False):
 	frappe.db.commit()
-
-	query = "alter table `tab{}` add column {} {}".format(
+	query = "alter table `tab{}` add column if not exists {} {}".format(
 		doctype,
 		column_name,
 		get_definition(fieldtype, precision, length),
