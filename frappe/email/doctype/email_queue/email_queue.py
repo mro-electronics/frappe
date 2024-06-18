@@ -211,6 +211,7 @@ class SendMailContext:
 		self.sent_to_atleast_one_recipient = any(
 			rec.recipient for rec in self.queue_doc.recipients if rec.is_mail_sent()
 		)
+		self.email_account_doc = None
 
 	def fetch_smtp_server(self):
 		self.email_account_doc = self.queue_doc.get_email_account(raise_error=True)
@@ -291,7 +292,11 @@ class SendMailContext:
 		return message
 
 	def get_tracker_str(self) -> str:
-		if frappe.conf.use_ssl and self.email_account_doc.track_email_status:
+		if (
+			self.email_account_doc
+			and self.email_account_doc.track_email_status
+			and self.queue_doc.communication
+		):
 			tracker_url_html = f'<img src="{get_url()}/api/method/frappe.core.doctype.communication.email.mark_email_as_seen?name={self.queue_doc.communication}"/>'
 			return quopri.encodestring(tracker_url_html.encode()).decode()
 		return ""
@@ -347,10 +352,33 @@ class SendMailContext:
 			elif attachment.get("print_format_attachment") == 1:
 				attachment.pop("print_format_attachment", None)
 				print_format_file = frappe.attach_print(**attachment)
+				self._store_file(print_format_file["fname"], print_format_file["fcontent"])
 				print_format_file.update({"parent": message_obj})
 				add_attachment(**print_format_file)
 
 		return safe_encode(message_obj.as_string())
+
+	def _store_file(self, file_name, content):
+		if not frappe.get_system_settings("store_attached_pdf_document"):
+			return
+
+		file_data = frappe._dict(file_name=file_name, is_private=1)
+
+		# Store on communication if available, else email queue doc
+		if self.queue_doc.communication:
+			file_data.attached_to_doctype = "Communication"
+			file_data.attached_to_name = self.queue_doc.communication
+		else:
+			file_data.attached_to_doctype = self.queue_doc.doctype
+			file_data.attached_to_name = self.queue_doc.name
+
+		if frappe.db.exists("File", file_data):
+			return
+
+		file = frappe.new_doc("File")
+		file.update(file_data)
+		file.content = content
+		file.insert()
 
 
 @frappe.whitelist()

@@ -2,11 +2,13 @@ import json
 import os
 import subprocess
 import sys
+import typing
 from shutil import which
 
 import click
 
 import frappe
+import frappe.commands
 from frappe.commands import get_site, pass_context
 from frappe.coverage import CodeCoverage
 from frappe.exceptions import SiteNotSpecifiedError
@@ -16,6 +18,9 @@ DATA_IMPORT_DEPRECATION = (
 	"[DEPRECATED] The `import-csv` command used 'Data Import Legacy' which has been deprecated.\n"
 	"Use `data-import` command instead to import data via 'Data Import'."
 )
+
+if typing.TYPE_CHECKING:
+	from IPython.terminal.embed import InteractiveShellEmbed
 
 
 @click.command("build")
@@ -499,10 +504,13 @@ def mariadb(context):
 	"""
 	Enter into mariadb console for a given site.
 	"""
+	from frappe.utils import get_site_path
+
 	site = get_site(context)
 	if not site:
 		raise SiteNotSpecifiedError
 	frappe.init(site=site)
+	os.environ["MYSQL_HISTFILE"] = os.path.abspath(get_site_path("logs", "mariadb_console.log"))
 	_mariadb()
 
 
@@ -601,6 +609,18 @@ def _console_cleanup():
 	frappe.destroy()
 
 
+def store_logs(terminal: "InteractiveShellEmbed") -> None:
+	from contextlib import suppress
+
+	frappe.log_level = 20  # info
+	with suppress(Exception):
+		logger = frappe.logger("ipython")
+		logger.info("=== bench console session ===")
+		for line in terminal.history_manager.get_range():
+			logger.info(line[2])
+		logger.info("=== session end ===")
+
+
 @click.command("console")
 @click.option("--autoreload", is_flag=True, help="Reload changes to code automatically")
 @pass_context
@@ -624,6 +644,7 @@ def console(context, autoreload=False):
 
 	all_apps = frappe.get_installed_apps()
 	failed_to_import = []
+	register(store_logs, terminal)  # Note: atexit runs in reverse order of registration
 
 	for app in list(all_apps):
 		try:
@@ -896,15 +917,15 @@ def run_ui_tests(
 		click.secho("Installing Cypress...", fg="yellow")
 		packages = " ".join(
 			[
-				"cypress@^13",
-				"@4tw/cypress-drag-drop@^2",
-				"cypress-real-events",
-				"@testing-library/cypress@^10",
+				"cypress@13.10.0",
+				"@4tw/cypress-drag-drop@2.2.5",
+				"cypress-real-events@1.12.0",
+				"@testing-library/cypress@10.0.1",
 				"@testing-library/dom@8.17.1",
-				"@cypress/code-coverage@^3",
+				"@cypress/code-coverage@3.12.39",
 			]
 		)
-		frappe.commands.popen(f"yarn add {packages} --no-lockfile")
+		frappe.commands.popen(f"yarn add {packages} --no-lockfile", raise_err=True)
 
 	# run for headless mode
 	run_or_open = "run --browser chrome" if headless else "open"
