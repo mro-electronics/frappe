@@ -269,7 +269,7 @@ frappe.views.QueryReport = class QueryReport extends frappe.views.BaseList {
 				fields: [
 					{
 						fieldname: "dashboard_chart_name",
-						label: "Chart Name",
+						label: __("Chart Name"),
 						fieldtype: "Data",
 					},
 					dashboard_field,
@@ -1312,7 +1312,7 @@ frappe.views.QueryReport = class QueryReport extends frappe.views.BaseList {
 
 		raise && this.toggle_message(false);
 
-		const filters = this.filters
+		return this.filters
 			.filter((f) => f.get_value())
 			.map((f) => {
 				var v = f.get_value();
@@ -1330,7 +1330,6 @@ frappe.views.QueryReport = class QueryReport extends frappe.views.BaseList {
 				Object.assign(acc, f);
 				return acc;
 			}, {});
-		return filters;
 	}
 
 	get_filter(fieldname) {
@@ -1456,7 +1455,10 @@ frappe.views.QueryReport = class QueryReport extends frappe.views.BaseList {
 			.map((fieldname) => {
 				const docfield = frappe.query_report.get_filter(fieldname).df;
 				const value = applied_filters[fieldname];
-				return `<h6>${__(docfield.label)}: ${frappe.format(value, docfield)}</h6>`;
+				return `<h6>${__(docfield.label, null, docfield.parent)}: ${frappe.format(
+					value,
+					docfield
+				)}</h6>`;
 			})
 			.join("");
 	}
