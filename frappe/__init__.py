@@ -47,7 +47,7 @@ from .utils.jinja import (
 )
 from .utils.lazy_loader import lazy_import
 
-__version__ = "14.94.3"
+__version__ = "14.95.0"
 __title__ = "Frappe Framework"
 
 controllers = {}
@@ -2440,6 +2440,15 @@ def _register_fault_handler():
 	# Some libraries monkey patch stderr, we need actual fd
 	if isinstance(sys.__stderr__, io.TextIOWrapper):
 		faulthandler.register(signal.SIGUSR1, file=sys.__stderr__)
+
+
+def override_whitelisted_method(original_method: str) -> str:
+	"""Return the first override or the original whitelisted method.
+
+	NOTE: in v15, this will change from using the first override to using the last override.
+	"""
+	overrides = get_hooks("override_whitelisted_methods", {}).get(original_method, [])
+	return overrides[0] if overrides else original_method
 
 
 if _tune_gc:
