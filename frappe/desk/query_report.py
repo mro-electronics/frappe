@@ -90,7 +90,7 @@ def generate_report_result(
 
 	result = normalize_result(result, columns)
 
-	if report.custom_columns:
+	if report.get("custom_columns"):
 		# saved columns (with custom columns / with different column order)
 		columns = report.custom_columns
 
@@ -211,7 +211,7 @@ def run(
 
 	result = None
 
-	if sbool(are_default_filters) and report.custom_filters:
+	if sbool(are_default_filters) and report.get("custom_filters"):
 		filters = report.custom_filters
 
 	try:
@@ -233,7 +233,7 @@ def run(
 
 	result["add_total_row"] = report.add_total_row and not result.get("skip_total_row", False)
 
-	if sbool(are_default_filters) and report.custom_filters:
+	if sbool(are_default_filters) and report.get("custom_filters"):
 		result["custom_filters"] = report.custom_filters
 
 	return result
@@ -318,7 +318,6 @@ def export_query():
 	csv_params = pop_csv_params(form_params)
 	clean_params(form_params)
 	parse_json(form_params)
-
 	report_name = form_params.report_name
 	frappe.permissions.can_export(
 		frappe.get_cached_value("Report", report_name, "ref_doctype"),
@@ -345,7 +344,7 @@ def export_query():
 		)
 		return
 
-	format_duration_fields(data)
+	format_fields(data)
 	xlsx_data, column_widths = build_xlsx_data(
 		data, visible_idx, include_indentation, include_filters=include_filters
 	)
@@ -359,18 +358,38 @@ def export_query():
 		file_extension = "xlsx"
 		content = make_xlsx(xlsx_data, "Query Report", column_widths=column_widths).getvalue()
 
+	if include_filters:
+		for value in (data.filters or {}).values():
+			suffix = ""
+			if isinstance(value, list):
+				suffix = "_" + ",".join(value)
+			elif isinstance(value, str) and value not in {"Yes", "No"}:
+				suffix = f"_{value}"
+
+			if valid_report_name(report_name, suffix):
+				report_name += suffix
+
 	provide_binary_file(report_name, file_extension, content)
 
 
-def format_duration_fields(data: frappe._dict) -> None:
-	for i, col in enumerate(data.columns):
-		if col.get("fieldtype") != "Duration":
-			continue
+def valid_report_name(report_name, suffix):
+	if len(report_name) + len(suffix) < 200:
+		return True
+	return False
 
-		for row in data.result:
-			index = col.get("fieldname") if isinstance(row, dict) else i
-			if row[index]:
-				row[index] = format_duration(row[index])
+
+def format_fields(data: frappe._dict) -> None:
+	for i, col in enumerate(data.columns):
+		if col.get("fieldtype") == "Duration":
+			for row in data.result:
+				index = col.get("fieldname") if isinstance(row, dict) else i
+				if row[index]:
+					row[index] = format_duration(row[index])
+		elif col.get("fieldtype") == "Currency" and col.get("precision"):
+			for row in data.result:
+				index = col.get("fieldname") if isinstance(row, dict) else i
+				if row[index]:
+					row[index] = round(row[index], col.get("precision"))
 
 
 def build_xlsx_data(data, visible_idx, include_indentation, include_filters=False, ignore_visible_idx=False):
