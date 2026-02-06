@@ -23,7 +23,7 @@ if typing.TYPE_CHECKING:
 def getdoc(doctype, name):
 	"""
 	Loads a doclist for a given document. This method is called directly from the client.
-	Requries "doctype", "name" as form variables.
+	Requires "doctype", "name" as form variables.
 	Will also call the "onload" method on the document.
 	"""
 
@@ -138,7 +138,7 @@ def get_docinfo(doc=None, doctype=None, name=None):
 		}
 	)
 
-	update_user_info(docinfo)
+	update_user_info(docinfo, doc)
 
 	frappe.response["docinfo"] = docinfo
 
@@ -184,7 +184,7 @@ def get_milestones(doctype, name):
 	return frappe.get_all(
 		"Milestone",
 		fields=["creation", "owner", "track_field", "value"],
-		filters=dict(reference_type=doctype, reference_name=name),
+		filters=dict(reference_type=doctype, reference_name=str(name)),
 	)
 
 
@@ -192,7 +192,7 @@ def get_attachments(dt, dn):
 	return frappe.get_all(
 		"File",
 		fields=["name", "file_name", "file_url", "is_private"],
-		filters={"attached_to_name": dn, "attached_to_doctype": dt},
+		filters={"attached_to_name": str(dn), "attached_to_doctype": dt},
 	)
 
 
@@ -309,6 +309,8 @@ def get_communication_data(
 		WHERE C.communication_type IN ('Communication', 'Feedback', 'Automated Message')
 		AND (C.reference_doctype = %(doctype)s AND C.reference_name = %(name)s)
 		{conditions}
+		ORDER BY C.communication_date DESC
+		LIMIT %(cte_limit)s
 	"""
 
 	# communications linked in Timeline Links
@@ -319,22 +321,30 @@ def get_communication_data(
 		WHERE C.communication_type IN ('Communication', 'Feedback', 'Automated Message')
 		AND `tabCommunication Link`.link_doctype = %(doctype)s AND `tabCommunication Link`.link_name = %(name)s
 		{conditions}
+		ORDER BY `tabCommunication Link`.communication_date DESC
+		LIMIT %(cte_limit)s
 	"""
 
 	return frappe.db.sql(
-		"""
+		f"""
+		WITH part1 AS ({part1}), part2 AS ({part2})
 		SELECT *
-		FROM (({part1}) UNION ({part2})) AS combined
-		{group_by}
+		FROM (
+			SELECT * FROM part1
+			UNION
+			SELECT * FROM part2
+		) AS combined
+		{group_by or ""}
 		ORDER BY communication_date DESC
 		LIMIT %(limit)s
 		OFFSET %(start)s
-	""".format(part1=part1, part2=part2, group_by=(group_by or "")),
+	""",
 		dict(
 			doctype=doctype,
-			name=name,
+			name=str(name),
 			start=frappe.utils.cint(start),
 			limit=limit,
+			cte_limit=limit + start,
 		),
 		as_dict=as_dict,
 	)
@@ -346,7 +356,7 @@ def get_assignments(dt, dn):
 		fields=["name", "allocated_to as owner", "description", "status"],
 		filters={
 			"reference_type": dt,
-			"reference_name": dn,
+			"reference_name": str(dn),
 			"status": ("not in", ("Cancelled", "Closed")),
 			"allocated_to": ("is", "set"),
 		},
@@ -367,7 +377,7 @@ def get_view_logs(doc: "Document") -> list[dict]:
 		"View Log",
 		filters={
 			"reference_doctype": doc.doctype,
-			"reference_name": doc.name,
+			"reference_name": str(doc.name),
 		},
 		fields=["name", "creation", "owner"],
 		order_by="creation desc",
@@ -377,7 +387,7 @@ def get_view_logs(doc: "Document") -> list[dict]:
 def get_tags(doctype: str, name: str) -> str:
 	tags = frappe.get_all(
 		"Tag Link",
-		filters={"document_type": doctype, "document_name": name},
+		filters={"document_type": doctype, "document_name": str(name)},
 		fields=["tag"],
 		pluck="tag",
 	)
@@ -470,8 +480,13 @@ def send_link_titles(link_titles):
 	frappe.local.response["_link_titles"].update(link_titles)
 
 
-def update_user_info(docinfo):
+def update_user_info(docinfo, doc=None):
 	users = set()
+
+	if doc:
+		for field in ("owner", "modified_by"):
+			if user := doc.get(field):
+				users.add(user)
 
 	users.update(d.sender for d in docinfo.communications)
 	users.update(d.user for d in docinfo.shared)
@@ -483,6 +498,7 @@ def update_user_info(docinfo):
 	users.update(d.owner for d in docinfo.attachment_logs)
 	users.update(d.owner for d in docinfo.assignment_logs)
 	users.update(d.owner for d in docinfo.comments)
+	users.update(d.owner for d in docinfo.versions)
 
 	frappe.utils.add_user_info(users, docinfo.user_info)
 
