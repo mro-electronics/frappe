@@ -110,7 +110,7 @@ def safe_exec(
 	if script_filename:
 		filename += f": {frappe.scrub(script_filename)}"
 
-	with safe_exec_flags(), patched_qb():
+	with safe_exec_flags():
 		# execute script compiled by RestrictedPython
 		exec(
 			compile_restricted(script, filename=filename, policy=FrappeTransformer),
@@ -403,19 +403,6 @@ def call_with_form_dict(function, kwargs):
 		frappe.local.form_dict = form_dict
 
 
-@contextmanager
-def patched_qb():
-	require_patching = isinstance(frappe.qb.terms, types.ModuleType)
-	try:
-		if require_patching:
-			_terms = frappe.qb.terms
-			frappe.qb.terms = _flatten(frappe.qb.terms)
-		yield
-	finally:
-		if require_patching:
-			frappe.qb.terms = _terms
-
-
 @lru_cache
 def _flatten(module):
 	new_mod = NamespaceDict()
@@ -459,6 +446,8 @@ def read_sql(query, *args, **kwargs):
 
 
 def check_safe_sql_query(query: str, throw: bool = True) -> bool:
+	import re
+
 	"""Check if SQL query is safe for running in restricted context.
 
 	Safe queries:
@@ -468,6 +457,15 @@ def check_safe_sql_query(query: str, throw: bool = True) -> bool:
 
 	query = query.strip().lower()
 	whitelisted_statements = ("select", "explain")
+
+	if re.search(r"\binto\s+(outfile|dumpfile)\b", query):
+		if throw:
+			frappe.throw(
+				_("Read-Only queries are allowed"),
+				title=_("Unsafe SQL query"),
+				exc=frappe.PermissionError,
+			)
+		return False
 
 	if query.startswith(whitelisted_statements) or (
 		query.startswith("with") and frappe.db.db_type == "mariadb"
@@ -528,7 +526,11 @@ def _getattr_for_safe_exec(object, name, default=None):
 	# 2. it is not an UNSAFE_ATTRIBUTES
 	_validate_attribute_read(object, name)
 
-	return RestrictedPython.Guards.safer_getattr(object, name, default=default)
+	ret = RestrictedPython.Guards.safer_getattr(object, name, default=default)
+	if isinstance(ret, types.ModuleType | types.CodeType | types.TracebackType | types.FrameType):
+		raise SyntaxError(f"Reading {type(ret)} is not allowed")
+
+	return ret
 
 
 def _get_attr_for_eval(object, name, default=ARGUMENT_NOT_SET):
